@@ -1,0 +1,10 @@
+DECISIONS.md
+ARCHIETCTURE.md
+.env
+.venv
+__pycache__
+*.pyc
+.DS_Store
+.idea
+.vscode
+.agents
