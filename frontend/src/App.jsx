@@ -1,8 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Plus,
   Search,
-  Grid,
+  Database,
   Send,
   Trash2,
   X,
@@ -18,7 +18,7 @@ import {
   User,
   Lock,
   Mail,
-  Notebook
+  Edit2
 } from 'lucide-react';
 
 export default function App() {
@@ -37,6 +37,11 @@ export default function App() {
   const [sidebarExpanded, setSidebarExpanded] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [convSearchQuery, setConvSearchQuery] = useState("");
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  // Rename Conversation States
+  const [editingConvId, setEditingConvId] = useState(null);
+  const [editingTitle, setEditingTitle] = useState("");
 
   // Modal State
   const [showDocsModal, setShowDocsModal] = useState(false);
@@ -45,8 +50,10 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState("");
 
-  // File Input Ref
+  // Refs
   const fileInputRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   // Mock Conversations (Knowledge Graph themed)
   const [conversations, setConversations] = useState([
@@ -91,6 +98,30 @@ export default function App() {
   const [inputVal, setInputVal] = useState("");
   const [isLlmGenerating, setIsLlmGenerating] = useState(false);
 
+  // Auto-scroll to bottom of chat
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [activeConversation?.messages, isLlmGenerating]);
+
+  // ChatGPT-style focus on keydown when not in inputs
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        return;
+      }
+      // Focus on printable key press
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && authToken) {
+        chatInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [authToken]);
+
   // Handle Login Submission
   const handleLogin = (e) => {
     e.preventDefault();
@@ -101,10 +132,12 @@ export default function App() {
       return;
     }
 
-    // Simulate login success
-    const name = email.split('@')[0];
+    // Set first name appropriately
+    const rawName = email.split('@')[0];
+    const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+
     setLoginUser({
-      name: name.charAt(0).toUpperCase() + name.slice(1),
+      name: formattedName,
       email: email,
       role: "Developer"
     });
@@ -121,7 +154,6 @@ export default function App() {
       return;
     }
 
-    // Simulate registration & login success
     setLoginUser({
       name: fullName,
       email: email,
@@ -139,7 +171,7 @@ export default function App() {
     setFullName('');
   };
 
-  // Create new conversation
+  // Create new conversation (creates conversation but does not expand the sidebar)
   const createNewConversation = () => {
     const newId = `conv-${Date.now()}`;
     const newConv = {
@@ -151,7 +183,25 @@ export default function App() {
     };
     setConversations([newConv, ...conversations]);
     setActiveConversationId(newId);
-    setSidebarExpanded(true); // Auto expand to show the list
+  };
+
+  // Start renaming a conversation
+  const startRename = (convId, currentTitle) => {
+    setEditingConvId(convId);
+    setEditingTitle(currentTitle);
+  };
+
+  // Save renamed conversation
+  const saveRename = (convId) => {
+    if (editingTitle.trim()) {
+      setConversations(prev => prev.map(c => {
+        if (c.id === convId) {
+          return { ...c, title: editingTitle.trim() };
+        }
+        return c;
+      }));
+    }
+    setEditingConvId(null);
   };
 
   // Handle Send Message
@@ -246,9 +296,16 @@ export default function App() {
     c.title.toLowerCase().includes(convSearchQuery.toLowerCase())
   );
 
+  // Extract first name for dynamic Claude-like greeting
+  const getFirstName = () => {
+    if (!loginUser?.name) return 'Guest';
+    // Take the first segment split by spaces
+    return loginUser.name.split(' ')[0];
+  };
+
   return (
     <>
-      {/* Moving Pastel Background Blobs */}
+      {/* Dynamic Background Blobs */}
       <div className="bg-blobs">
         <div className="blob blob-1"></div>
         <div className="blob blob-2"></div>
@@ -259,84 +316,103 @@ export default function App() {
       {!authToken ? (
         <div className="auth-wrapper">
           <div className="auth-card">
-            <div className="auth-header">
-              <div className="auth-logo">V</div>
-              <h2 className="auth-title">Vectra AI</h2>
-              <p className="auth-subtitle">Knowledge Graph Ingestion Workspace</p>
+            {/* Split layout: Left Branding panel for desktop */}
+            <div className="auth-left">
+              <h2 style={{ fontSize: '2rem', fontWeight: 800 }}>Vectra AI</h2>
+              <p style={{ opacity: 0.8, fontSize: '0.95rem', lineHeight: '1.6' }}>
+                Build modern semantic databases instantly. Ingest PDFs, text sheets, and JSON schemas to auto-extract entities, match vectors, and map relationships in your graph database.
+              </p>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '24px' }}>
+                <span style={{ fontSize: '0.75rem', background: 'rgba(255,255,255,0.15)', padding: '6px 12px', borderRadius: '20px' }}>Neo4j Graph Mapping</span>
+                <span style={{ fontSize: '0.75rem', background: 'rgba(255,255,255,0.15)', padding: '6px 12px', borderRadius: '20px' }}>Qdrant Multi-Tenancy</span>
+              </div>
             </div>
 
-            {authError && <div className="auth-error">{authError}</div>}
+            {/* Split layout: Right Form fields panel */}
+            <div className="auth-right">
+              <div style={{ textAlign: 'center' }}>
+                <h3 className="auth-title" style={{ fontSize: '1.5rem' }}>
+                  {authScreen === 'login' ? 'Welcome back' : 'Create account'}
+                </h3>
+                <p className="auth-subtitle">
+                  {authScreen === 'login' ? 'Sign in to access your knowledge graph' : 'Set up your profile'}
+                </p>
+              </div>
 
-            <form onSubmit={authScreen === 'login' ? handleLogin : handleRegister} className="auth-form">
-              {authScreen === 'register' && (
+              {authError && <div className="auth-error">{authError}</div>}
+
+              <form onSubmit={authScreen === 'login' ? handleLogin : handleRegister} className="auth-form">
+                {authScreen === 'register' && (
+                  <div className="auth-group">
+                    <label className="auth-label">Full Name</label>
+                    <div style={{ position: 'relative' }}>
+                      <User size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+                      <input 
+                        type="text" 
+                        placeholder="Max Butler" 
+                        className="auth-input" 
+                        style={{ paddingLeft: '38px', width: '100%' }}
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="auth-group">
-                  <label className="auth-label">Full Name</label>
+                  <label className="auth-label">Email Address</label>
                   <div style={{ position: 'relative' }}>
-                    <User size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+                    <Mail size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
                     <input 
-                      type="text" 
-                      placeholder="John Doe" 
+                      type="email" 
+                      placeholder="max@example.com" 
                       className="auth-input" 
                       style={{ paddingLeft: '38px', width: '100%' }}
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
                     />
                   </div>
                 </div>
-              )}
 
-              <div className="auth-group">
-                <label className="auth-label">Email Address</label>
-                <div style={{ position: 'relative' }}>
-                  <Mail size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
-                  <input 
-                    type="email" 
-                    placeholder="name@example.com" 
-                    className="auth-input" 
-                    style={{ paddingLeft: '38px', width: '100%' }}
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
+                <div className="auth-group">
+                  <label className="auth-label">Password</label>
+                  <div style={{ position: 'relative' }}>
+                    <Lock size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
+                    <input 
+                      type="password" 
+                      placeholder="••••••••" 
+                      className="auth-input" 
+                      style={{ paddingLeft: '38px', width: '100%' }}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
                 </div>
+
+                <button type="submit" className="auth-submit-btn" style={{ marginTop: '8px' }}>
+                  <span>{authScreen === 'login' ? 'Login to Vectra' : 'Register Account'}</span>
+                </button>
+              </form>
+
+              <div className="auth-footer" style={{ marginTop: '8px' }}>
+                {authScreen === 'login' ? (
+                  <>
+                    Don't have an account? 
+                    <button onClick={() => setAuthScreen('register')} className="auth-toggle-link">
+                      Register
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    Already have an account? 
+                    <button onClick={() => setAuthScreen('login')} className="auth-toggle-link">
+                      Login
+                    </button>
+                  </>
+                )}
               </div>
-
-              <div className="auth-group">
-                <label className="auth-label">Password</label>
-                <div style={{ position: 'relative' }}>
-                  <Lock size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
-                  <input 
-                    type="password" 
-                    placeholder="••••••••" 
-                    className="auth-input" 
-                    style={{ paddingLeft: '38px', width: '100%' }}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <button type="submit" className="auth-submit-btn">
-                <span>{authScreen === 'login' ? 'Login to Vectra' : 'Register Account'}</span>
-              </button>
-            </form>
-
-            <div className="auth-footer">
-              {authScreen === 'login' ? (
-                <>
-                  Don't have an account? 
-                  <button onClick={() => setAuthScreen('register')} className="auth-toggle-link">
-                    Register
-                  </button>
-                </>
-              ) : (
-                <>
-                  Already have an account? 
-                  <button onClick={() => setAuthScreen('login')} className="auth-toggle-link">
-                    Login
-                  </button>
-                </>
-              )}
             </div>
+
           </div>
         </div>
       ) : (
@@ -355,7 +431,7 @@ export default function App() {
               {/* Conditionally Render: Icons (if collapsed) vs. Chats List (if expanded) */}
               {!sidebarExpanded ? (
                 <div className="sidebar-nav">
-                  {/* New Chat Button */}
+                  {/* New Chat Button (Creates a new session but does NOT expand the sidebar) */}
                   <button 
                     className="nav-item" 
                     title="New Session"
@@ -388,13 +464,13 @@ export default function App() {
                     <Search size={20} />
                   </button>
 
-                  {/* Manage Documents Grid */}
+                  {/* Manage Documents Database Icon */}
                   <button 
                     className="nav-item" 
                     title="Uploaded Documents"
                     onClick={() => setShowDocsModal(true)}
                   >
-                    <Grid size={20} />
+                    <Database size={20} />
                   </button>
                 </div>
               ) : (
@@ -431,7 +507,7 @@ export default function App() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flexGrow: 1, maxHeight: 'calc(90vh - 180px)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flexGrow: 1, maxHeight: 'calc(100% - 140px)' }}>
                     {filteredConversations.length === 0 ? (
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>
                         No active sessions found
@@ -441,10 +517,63 @@ export default function App() {
                         <div 
                           key={conv.id} 
                           className={`chat-item ${conv.id === activeConversationId ? 'active' : ''}`}
-                          onClick={() => setActiveConversationId(conv.id)}
+                          onClick={() => {
+                            if (editingConvId !== conv.id) {
+                              setActiveConversationId(conv.id);
+                            }
+                          }}
+                          style={{ display: 'flex', justifyContent: 'space-between', paddingRight: '12px' }}
                         >
-                          <MessageSquare size={16} />
-                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{conv.title}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexGrow: 1, overflow: 'hidden' }}>
+                            <MessageSquare size={16} />
+                            {editingConvId === conv.id ? (
+                              <input 
+                                type="text"
+                                className="chat-input"
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    saveRename(conv.id);
+                                  }
+                                }}
+                                onBlur={() => saveRename(conv.id)}
+                                autoFocus
+                                style={{ 
+                                  background: 'rgba(255,255,255,0.8)', 
+                                  border: '1px solid var(--black-magic)',
+                                  borderRadius: '6px',
+                                  padding: '2px 6px',
+                                  fontSize: '0.85rem',
+                                  width: '100%'
+                                }}
+                              />
+                            ) : (
+                              <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{conv.title}</span>
+                            )}
+                          </div>
+                          
+                          {editingConvId !== conv.id && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startRename(conv.id, conv.title);
+                              }}
+                              style={{ 
+                                background: 'transparent', 
+                                border: 'none', 
+                                cursor: 'pointer', 
+                                color: 'var(--text-muted)',
+                                padding: '2px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                opacity: 0.6
+                              }}
+                              title="Rename chat"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                          )}
                         </div>
                       ))
                     )}
@@ -453,7 +582,78 @@ export default function App() {
               )}
             </div>
 
-            {/* Close Sidebar button (Always visible at the bottom of the sidebar) */}
+            {/* Sidebar bottom Profile panel */}
+            <div className="sidebar-profile">
+              {/* Profile Popover Menu (renders above card when toggled) */}
+              {showProfileMenu && (
+                <>
+                  <div className="popover-backdrop" onClick={() => setShowProfileMenu(false)} />
+                  <div className="profile-popover">
+                    <div className="popover-header">
+                      <div className="profile-avatar-circle">
+                        {loginUser?.name ? loginUser.name.charAt(0).toUpperCase() : 'U'}
+                      </div>
+                      <div className="popover-header-details">
+                        <span className="popover-header-name">{loginUser?.name}</span>
+                        <span className="popover-header-email">{loginUser?.email}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="popover-item" onClick={() => { alert('Upgrade plan window coming soon!'); setShowProfileMenu(false); }}>
+                      <Sparkles size={14} />
+                      <span>Upgrade plan</span>
+                    </div>
+                    <div className="popover-item" onClick={() => { alert('Personalization options coming soon!'); setShowProfileMenu(false); }}>
+                      <Sparkles size={14} style={{ opacity: 0 }} />
+                      <span>Personalization</span>
+                    </div>
+                    <div className="popover-item" onClick={() => { alert('Profile editor coming soon!'); setShowProfileMenu(false); }}>
+                      <User size={14} />
+                      <span>Profile</span>
+                    </div>
+                    <div className="popover-item" onClick={() => { alert('Settings window coming soon!'); setShowProfileMenu(false); }}>
+                      <Sparkles size={14} style={{ opacity: 0 }} />
+                      <span>Settings</span>
+                    </div>
+                    <div className="popover-item" onClick={() => { alert('Help desk coming soon!'); setShowProfileMenu(false); }}>
+                      <Sparkles size={14} style={{ opacity: 0 }} />
+                      <span>Help</span>
+                    </div>
+                    
+                    <div className="popover-divider" />
+                    
+                    <button className="popover-item popover-item-logout" onClick={() => { handleLogout(); setShowProfileMenu(false); }}>
+                      <LogOut size={14} />
+                      <span>Log out</span>
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Avatar trigger card (different based on collapsed/expanded sidebar) */}
+              {!sidebarExpanded ? (
+                <div 
+                  className="profile-avatar-circle" 
+                  style={{ cursor: 'pointer', margin: '0 auto' }}
+                  onClick={() => setShowProfileMenu(!showProfileMenu)}
+                  title={loginUser?.name || "Profile Menu"}
+                >
+                  {loginUser?.name ? loginUser.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+              ) : (
+                <div className="sidebar-profile-card" onClick={() => setShowProfileMenu(!showProfileMenu)}>
+                  <div className="profile-avatar-circle">
+                    {loginUser?.name ? loginUser.name.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                  <div className="profile-card-details">
+                    <span className="profile-card-name">{loginUser?.name}</span>
+                    <span className="profile-card-role">{loginUser?.role}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Close Sidebar button */}
             <button 
               className="collapse-btn" 
               onClick={() => setSidebarExpanded(false)}
@@ -467,30 +667,14 @@ export default function App() {
           <main className="main-dashboard">
             
             {/* Top Bar */}
-            <div className="top-bar">
+            <div className="top-bar" style={{ marginBottom: '24px' }}>
               <div className="dropdown-selector">
                 <Sparkles size={16} className="text-accent" />
                 <span>Vectra Assistant v1.0</span>
               </div>
 
-              <div className="dashboard-title-center">
-                Knowledge Graph Builder
-              </div>
-
-              <div className="profile-section">
-                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--black-magic-light)' }}>
-                  {loginUser.name} ({loginUser.role})
-                </span>
-                <button 
-                  className="dropdown-selector" 
-                  style={{ border: 'none', background: 'rgba(0,0,0,0.05)', padding: '8px 12px' }}
-                  onClick={handleLogout}
-                  title="Logout"
-                >
-                  <LogOut size={14} />
-                  <span>Logout</span>
-                </button>
-              </div>
+              {/* Removed center title & right logout panel for space */}
+              <div></div>
             </div>
 
             {/* Notification notice for upload success */}
@@ -506,27 +690,29 @@ export default function App() {
             {/* Core Content Area */}
             {activeConversation.messages.length <= 1 ? (
               /* Welcome / Initial Dashboard View */
-              <div className="welcome-container">
-                <h1 className="welcome-header">
-                  Hi {loginUser.name}, Ready to Build Your Knowledge Base?
-                  <span>Ingest documents, map relationships, and semantic search nodes.</span>
+              <div className="welcome-container" style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h1 className="welcome-header" style={{ fontSize: '2.5rem', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', marginBottom: '40px' }}>
+                  <span>Hello {getFirstName()}.</span>
+                  <span style={{ color: '#6b7a99', fontSize: '1.2rem', fontWeight: 400, letterSpacing: '0.3px', marginTop: '6px' }}>
+                    Ready to build your knowledge base? Grab a coffee and let's map out some data.
+                  </span>
                 </h1>
 
                 {/* Grid of Interactive Actions */}
-                <div className="card-grid">
+                <div className="card-grid" style={{ maxWidth: '720px', margin: '0 auto', width: '100%' }}>
                   
                   {/* Upload Card */}
-                  <div className="glass-card" onClick={triggerFileUpload}>
+                  <div className="glass-card" onClick={triggerFileUpload} style={{ minHeight: '180px' }}>
                     <div>
                       <div className="card-icon">
-                        <Upload size={24} />
+                        <Upload size={22} />
                       </div>
-                      <h3 className="card-title">Upload Documents</h3>
-                      <p className="card-desc">
+                      <h3 className="card-title" style={{ fontSize: '1.15rem' }}>Upload Documents</h3>
+                      <p className="card-desc" style={{ fontSize: '0.85rem' }}>
                         Ingest PDFs, TXT, CSV, or JSON specifications. Automatically chunk and extract vector embeddings.
                       </p>
                     </div>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, alignSelf: 'flex-end', color: 'var(--accent-color)', marginTop: '12px' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, alignSelf: 'flex-end', color: 'var(--accent-color)', marginTop: '8px' }}>
                       Click to browse files &rarr;
                     </span>
                   </div>
@@ -534,17 +720,17 @@ export default function App() {
                   {/* Graph Card */}
                   <div className="glass-card" onClick={() => {
                     setInputVal("Generate a relational schema map from all active knowledge base documents.");
-                  }}>
+                  }} style={{ minHeight: '180px' }}>
                     <div>
                       <div className="card-icon">
-                        <BarChart3 size={24} />
+                        <BarChart3 size={22} />
                       </div>
-                      <h3 className="card-title">Explore Knowledge Graph</h3>
-                      <p className="card-desc">
+                      <h3 className="card-title" style={{ fontSize: '1.15rem' }}>Explore Knowledge Graph</h3>
+                      <p className="card-desc" style={{ fontSize: '0.85rem' }}>
                         Query the mapped entities, generate semantic relational reports, and browse entity structures.
                       </p>
                     </div>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, alignSelf: 'flex-end', color: 'var(--accent-color)', marginTop: '12px' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, alignSelf: 'flex-end', color: 'var(--accent-color)', marginTop: '8px' }}>
                       Explore graph relationships &rarr;
                     </span>
                   </div>
@@ -553,7 +739,7 @@ export default function App() {
               </div>
             ) : (
               /* Active Chat Window View */
-              <div className="chat-window">
+              <div className="chat-window" style={{ paddingBottom: '20px' }}>
                 {activeConversation.messages.map((msg, i) => (
                   <div 
                     key={i} 
@@ -569,6 +755,7 @@ export default function App() {
                     <span>Querying Vectra AI knowledge indices in Qdrant...</span>
                   </div>
                 )}
+                <div ref={messagesEndRef} />
               </div>
             )}
 
@@ -604,7 +791,8 @@ export default function App() {
                 {/* Chat Text Input */}
                 <input 
                   type="text" 
-                  placeholder="Ask me anything about your uploaded documents or query the knowledge graph..." 
+                  ref={chatInputRef}
+                  placeholder="Ask Vectra..." 
                   className="chat-input"
                   value={inputVal}
                   onChange={(e) => setInputVal(e.target.value)}
