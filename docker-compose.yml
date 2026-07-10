@@ -105,6 +105,19 @@ services:
         ollama pull qwen2.5:3b
         wait
 
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: knowledge_graph_frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   neo4j_data:
