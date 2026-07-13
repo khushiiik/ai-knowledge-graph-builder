@@ -69,6 +69,11 @@ services:
 
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - shared_storage:/app/storage
     env_file:
       - .env
     environment:
@@ -80,7 +85,7 @@ services:
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
       REDIS_URL: redis://redis:6379/0
-      OLLAMA_HOST: http://ollama:11434
+      HF_ENDPOINT: https://hf-mirror.com
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,19 +96,36 @@ services:
       redis:
         condition: service_healthy
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker --loglevel=info
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
-      - ollama_data:/root/.ollama
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        sleep 5
-        ollama pull qwen2.5:3b
-        wait
+      - shared_storage:/app/storage
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password}@postgres:5432/${POSTGRES_DB:-knowledge_graph}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-password}
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      REDIS_URL: redis://redis:6379/0
+      HF_ENDPOINT: https://hf-mirror.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   frontend:
     build:
@@ -124,4 +146,4 @@ volumes:
   neo4j_logs:
   qdrant_data:
   redis_data:
-  ollama_data:
+  shared_storage:

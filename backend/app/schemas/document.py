@@ -35,6 +35,8 @@ class DocumentRead(DocumentBase):
     updated_at: datetime
     processed_at: datetime | None = None
     deleted_at: datetime | None = None
+    progress: int | None = None
+    current_step: str | None = None
 
     model_config = {
         "from_attributes": True

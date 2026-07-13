@@ -23,8 +23,16 @@ import {
 
 export default function App() {
   // Authentication State
-  const [authToken, setAuthToken] = useState(null);
-  const [loginUser, setLoginUser] = useState(null);
+  const [authToken, setAuthToken] = useState(() => {
+    return localStorage.getItem('vectra_auth_token');
+  });
+  const [loginUser, setLoginUser] = useState(() => {
+    const saved = localStorage.getItem('vectra_login_user');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return null;
+  });
   const [authScreen, setAuthScreen] = useState('login'); // 'login' | 'register'
   
   // Auth Form Fields
@@ -55,44 +63,38 @@ export default function App() {
   const chatInputRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  // Mock Conversations (Knowledge Graph themed)
-  const [conversations, setConversations] = useState([
-    {
-      id: "conv-1",
-      title: "Project Architecture Extraction",
-      messages: [
-        { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." },
-        { sender: "user", text: "What entities were extracted from the documentation?" },
-        { sender: "assistant", text: "The following entities were extracted and successfully mapped in the Neo4j graph db:\n- `Vectra AI` (AI System)\n- `Vite` (Frontend Build Tool)\n- `Qdrant` (Vector Database)\n- `Neo4j` (Graph Database)\n- `PostgreSQL` (Relational Database)" }
-      ]
-    },
-    {
-      id: "conv-2",
-      title: "Semantic Search Evaluation",
-      messages: [
-        { sender: "assistant", text: "Hello! I can help you search semantic nodes in your database." },
-        { sender: "user", text: "How are files isolated in Qdrant?" },
-        { sender: "assistant", text: "Each document chunk is tagged with your user's `tenant_id` at indexing time. Queries are executed with a payload filter matching your user ID to ensure complete multi-tenant security." }
-      ]
-    },
-    {
-      id: "conv-3",
-      title: "Neo4j Relation Mapping",
-      messages: [
-        { sender: "assistant", text: "Hello! Ready to map node relationships?" }
-      ]
+  // Load initial conversations from LocalStorage or default
+  const [conversations, setConversations] = useState(() => {
+    const saved = localStorage.getItem('vectra_conversations');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
     }
-  ]);
+    return [
+      {
+        id: "conv-1",
+        title: "Project Architecture Extraction",
+        messages: [
+          { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
+        ]
+      }
+    ];
+  });
 
-  const [activeConversationId, setActiveConversationId] = useState("conv-1");
-  const activeConversation = conversations.find(c => c.id === activeConversationId) || conversations[0];
+  const [activeConversationId, setActiveConversationId] = useState(() => {
+    const saved = localStorage.getItem('vectra_conversations');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0) return parsed[0].id;
+      } catch (e) {}
+    }
+    return "conv-1";
+  });
 
-  // Mock Ingested Documents
-  const [documents, setDocuments] = useState([
-    { id: "doc-1", name: "project_specification.pdf", size: "1.2 MB", type: "PDF" },
-    { id: "doc-2", name: "neo4j_schema.json", size: "8 KB", type: "JSON" },
-    { id: "doc-3", name: "ingested_nodes.txt", size: "4 KB", type: "TXT" }
-  ]);
+  const activeConversation = conversations.find(c => c.id === activeConversationId) || conversations[0] || { id: "conv-1", messages: [] };
+
+  // Documents list fetched dynamically from backend
+  const [documents, setDocuments] = useState([]);
 
   // Input Box States
   const [inputVal, setInputVal] = useState("");
@@ -106,6 +108,77 @@ export default function App() {
   useEffect(() => {
     scrollToBottom();
   }, [activeConversation?.messages, isLlmGenerating]);
+
+  // Persist auth tokens
+  useEffect(() => {
+    if (authToken) {
+      localStorage.setItem('vectra_auth_token', authToken);
+    } else {
+      localStorage.removeItem('vectra_auth_token');
+    }
+  }, [authToken]);
+
+  // Persist user profiles
+  useEffect(() => {
+    if (loginUser) {
+      localStorage.setItem('vectra_login_user', JSON.stringify(loginUser));
+    } else {
+      localStorage.removeItem('vectra_login_user');
+    }
+  }, [loginUser]);
+
+  // Persist conversations
+  useEffect(() => {
+    localStorage.setItem('vectra_conversations', JSON.stringify(conversations));
+  }, [conversations]);
+
+  // Fetch documents from backend dynamically
+  const fetchDocuments = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/documents', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = data.map(doc => ({
+          id: doc.id,
+          name: doc.original_filename,
+          size: `${(doc.file_size / (1024 * 1024)).toFixed(2)} MB`,
+          type: doc.file_type.toUpperCase(),
+          status: doc.status,
+          progress: doc.progress || 0,
+          currentStep: doc.current_step || ''
+        }));
+        setDocuments(mapped);
+      }
+    } catch (err) {
+      console.error('Failed to fetch documents:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (authToken) {
+      fetchDocuments();
+    }
+  }, [authToken]);
+
+  // Poll for processing documents every 3 seconds
+  useEffect(() => {
+    if (!authToken) return;
+
+    const hasProcessing = documents.some(doc => 
+      doc.status === 'QUEUED' || doc.status === 'PROCESSING' || doc.status === 'UPLOADING'
+    );
+
+    if (!hasProcessing) return;
+
+    const interval = setInterval(() => {
+      fetchDocuments();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [documents, authToken]);
 
   // ChatGPT-style focus on keydown when not in inputs
   useEffect(() => {
@@ -123,7 +196,7 @@ export default function App() {
   }, [authToken]);
 
   // Handle Login Submission
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
 
@@ -132,20 +205,41 @@ export default function App() {
       return;
     }
 
-    // Set first name appropriately
-    const rawName = email.split('@')[0];
-    const formattedName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+    try {
+      const res = await fetch('/auth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.detail || 'Incorrect credentials.');
+      }
+      const data = await res.json();
 
-    setLoginUser({
-      name: formattedName,
-      email: email,
-      role: "Developer"
-    });
-    setAuthToken('mock_token_key');
+      // Retrieve full name from registration profiles cache
+      const cachedProfiles = JSON.parse(localStorage.getItem('vectra_user_profiles') || '{}');
+      let name = cachedProfiles[email] || '';
+      if (!name) {
+        // Fallback: Parse dynamically from email prefix
+        const rawName = email.split('@')[0];
+        const firstSegment = rawName.split(/[\._-]/)[0];
+        name = firstSegment.charAt(0).toUpperCase() + firstSegment.slice(1);
+      }
+
+      setLoginUser({
+        name: name,
+        email: email,
+        role: "Developer"
+      });
+      setAuthToken(data.access_token);
+    } catch (err) {
+      setAuthError(err.message);
+    }
   };
 
   // Handle Register Submission
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     setAuthError('');
 
@@ -154,12 +248,42 @@ export default function App() {
       return;
     }
 
-    setLoginUser({
-      name: fullName,
-      email: email,
-      role: "Developer"
-    });
-    setAuthToken('mock_token_key');
+    try {
+      const registerRes = await fetch('/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, full_name: fullName, password })
+      });
+      if (!registerRes.ok) {
+        const errData = await registerRes.json();
+        throw new Error(errData.detail || 'Email already registered.');
+      }
+
+      // Automatically log in after registration
+      const tokenRes = await fetch('/auth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      if (!tokenRes.ok) {
+        throw new Error('Registration succeeded, but login failed.');
+      }
+      const data = await tokenRes.json();
+
+      // Save full name in profile cache
+      const cachedProfiles = JSON.parse(localStorage.getItem('vectra_user_profiles') || '{}');
+      cachedProfiles[email] = fullName;
+      localStorage.setItem('vectra_user_profiles', JSON.stringify(cachedProfiles));
+
+      setLoginUser({
+        name: fullName,
+        email: email,
+        role: "Developer"
+      });
+      setAuthToken(data.access_token);
+    } catch (err) {
+      setAuthError(err.message);
+    }
   };
 
   // Handle Logout
@@ -204,49 +328,108 @@ export default function App() {
     setEditingConvId(null);
   };
 
-  // Handle Send Message
-  const handleSendMessage = (e) => {
+  // Handle Send Message (Actual SSE Streaming)
+  const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
-    if (!inputVal.trim() || isLlmGenerating) return;
+    if (!inputVal.trim() || isLlmGenerating || !authToken) return;
 
     const userMsg = { sender: "user", text: inputVal };
+    const currentMessages = [...activeConversation.messages, userMsg];
     
     // Add user message locally
-    const updatedConversations = conversations.map(c => {
+    setConversations(prev => prev.map(c => {
       if (c.id === activeConversationId) {
         return {
           ...c,
-          messages: [...c.messages, userMsg]
+          messages: currentMessages
         };
       }
       return c;
-    });
-    setConversations(updatedConversations);
+    }));
+
+    const question = inputVal;
     setInputVal("");
     setIsLlmGenerating(true);
 
-    // Simulate LLM response after 1.2s
-    setTimeout(() => {
-      const responses = [
-        "Based on the semantic search, the database matches these concepts: Neo4j links Vite frontend node to Qdrant vector index.",
-        "Generating the knowledge graph relation list... Ingestion validation returns healthy graph indices.",
-        "I've updated the semantic knowledge graph. Let me know if you would like me to compile these parameters into a structured report.",
-        "I don't have information about that in the current uploaded document context. Please upload the relevant specification file."
-      ];
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      const assistantMsg = { sender: "assistant", text: randomResponse };
+    // Add a placeholder assistant message for incoming stream
+    const updatedMessages = [...currentMessages, { sender: "assistant", text: "" }];
+    setConversations(prev => prev.map(c => {
+      if (c.id === activeConversationId) {
+        return {
+          ...c,
+          messages: updatedMessages
+        };
+      }
+      return c;
+    }));
 
+    try {
+      const res = await fetch('/chat/ask', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ question })
+      });
+      if (!res.ok) {
+        throw new Error('Query error. Is Ollama or the backend offline?');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let fullAnswer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("data: ")) {
+            try {
+              const payload = JSON.parse(trimmed.slice(6));
+              if (payload.token) {
+                fullAnswer += payload.token;
+
+                // Update assistant message with accumulated tokens
+                setConversations(prev => prev.map(c => {
+                  if (c.id === activeConversationId) {
+                    const msgs = [...c.messages];
+                    if (msgs.length > 0) {
+                      msgs[msgs.length - 1] = { sender: "assistant", text: fullAnswer };
+                    }
+                    return { ...c, messages: msgs };
+                  }
+                  return c;
+                }));
+              }
+            } catch (err) {
+              // Ignore partial JSON parsing errors
+            }
+          }
+        }
+      }
+    } catch (err) {
+      const errorMsg = { sender: "assistant", text: `Error: ${err.message}` };
       setConversations(prev => prev.map(c => {
         if (c.id === activeConversationId) {
           return {
             ...c,
-            messages: [...c.messages, assistantMsg]
+            messages: [...currentMessages, errorMsg]
           };
         }
         return c;
       }));
+    } finally {
       setIsLlmGenerating(false);
-    }, 1200);
+    }
   };
 
   // Trigger File Input Click
@@ -254,26 +437,31 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  // Handle File upload simulation
-  const handleFileChange = (e) => {
+  // Handle File upload
+  const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
-    if (files.length === 0) return;
+    if (files.length === 0 || !authToken) return;
 
     setIsUploading(true);
     setUploadProgress(`Ingesting ${files.length} file(s)...`);
 
-    // Simulate ingestion delay
-    setTimeout(() => {
-      const newDocs = files.map((file, idx) => ({
-        id: `doc-${Date.now()}-${idx}`,
-        name: file.name,
-        size: `${(file.size / (1024 * 1024)).toFixed(2)} MB`,
-        type: file.name.split('.').pop().toUpperCase()
-      }));
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const formData = new FormData();
+        formData.append('file', file);
 
-      setDocuments(prev => [...newDocs, ...prev]);
-      setIsUploading(false);
-      setUploadProgress("");
+        const res = await fetch('/documents/upload', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${authToken}` },
+          body: formData
+        });
+        if (!res.ok) {
+          throw new Error(`Failed to upload ${file.name}`);
+        }
+      }
+
+      await fetchDocuments();
 
       // Trigger standard confirmation banner
       const notification = document.getElementById('upload-notice');
@@ -283,12 +471,30 @@ export default function App() {
           notification.style.display = 'none';
         }, 3000);
       }
-    }, 1500);
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress("");
+    }
   };
 
   // Handle document deletion
-  const handleDeleteDocument = (docId) => {
-    setDocuments(prev => prev.filter(doc => doc.id !== docId));
+  const handleDeleteDocument = async (docId) => {
+    if (!authToken) return;
+    try {
+      const res = await fetch(`/documents/${docId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        setDocuments(prev => prev.filter(doc => doc.id !== docId));
+      } else {
+        throw new Error('Failed to delete document.');
+      }
+    } catch (err) {
+      alert(err.message);
+    }
   };
 
   // Filter conversations
@@ -299,7 +505,6 @@ export default function App() {
   // Extract first name for dynamic Claude-like greeting
   const getFirstName = () => {
     if (!loginUser?.name) return 'Guest';
-    // Take the first segment split by spaces
     return loginUser.name.split(' ')[0];
   };
 
@@ -828,16 +1033,36 @@ export default function App() {
                     documents.map(doc => (
                       <div key={doc.id} className="doc-item-row">
                         <div className="doc-item-info">
-                          <FileText size={20} style={{ color: 'var(--accent-color)' }} />
+                          {doc.status === 'READY' ? (
+                            <FileText size={20} style={{ color: 'var(--accent-color)' }} />
+                          ) : doc.status === 'FAILED' ? (
+                            <FileText size={20} style={{ color: 'red' }} />
+                          ) : (
+                            <Loader2 size={20} className="animate-spin" style={{ color: 'var(--accent-color)' }} />
+                          )}
                           <div>
                             <div className="doc-name">{doc.name}</div>
-                            <div className="doc-size">{doc.size} &bull; {doc.type}</div>
+                            <div className="doc-size">
+                              {doc.size} &bull; {doc.type}
+                              {(doc.status === 'QUEUED' || doc.status === 'PROCESSING' || doc.status === 'UPLOADING') && (
+                                <span style={{ marginLeft: '8px', color: 'var(--accent-color)', fontWeight: 600 }}>
+                                  ({doc.progress}% {doc.currentStep ? `- ${doc.currentStep}` : ''})
+                                </span>
+                              )}
+                              {doc.status === 'FAILED' && (
+                                <span style={{ marginLeft: '8px', color: 'red', fontWeight: 600 }}>
+                                  (Failed)
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <button 
                           className="delete-doc-btn" 
                           title="Delete Document"
                           onClick={() => handleDeleteDocument(doc.id)}
+                          disabled={doc.status !== 'READY' && doc.status !== 'FAILED'}
+                          style={{ opacity: (doc.status !== 'READY' && doc.status !== 'FAILED') ? 0.4 : 1 }}
                         >
                           <Trash2 size={16} />
                         </button>

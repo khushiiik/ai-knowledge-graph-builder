@@ -39,7 +39,6 @@ PyJWT==2.13.0
 python-dotenv==1.2.2
 python-multipart==0.0.32
 pytz==2026.2
-pywin32==312; sys_platform == 'win32'
 PyYAML==6.0.3
 qdrant-client==1.18.0
 redis==5.3.1
@@ -57,8 +56,9 @@ watchfiles==1.2.0
 websockets==16.0
 langchain>=0.2.0
 langchain-community>=0.2.0
-langchain-ollama>=0.1.0
 pypdf>=4.0.0
-sentence-transformers>=2.2.2
+celery>=5.3.0
+openai
+fastembed
 
 

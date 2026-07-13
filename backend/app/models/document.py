@@ -1,12 +1,14 @@
 from enum import Enum
 import uuid
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.user import Base
 
 class DocumentStatus(str, Enum):
     UPLOADING = "UPLOADING"
+    QUEUED = "QUEUED"
+    PROCESSING = "PROCESSING"
     READY = "READY"
     FAILED = "FAILED"
     DELETED = "DELETED"
@@ -25,6 +27,7 @@ class Document(Base):
     file_size = Column(Integer, nullable=False)
     checksum = Column(String, nullable=True)
     status = Column(String, default=DocumentStatus.UPLOADING.value, nullable=False)
+    raw_text = Column(Text, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)

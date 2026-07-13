@@ -11,7 +11,8 @@ from app.schemas.document import DocumentRead
 from app.utils.file_storage import save_upload_file, delete_stored_file
 from app.validators.upload_validator import validate_uploaded_file
 
-from app.pipeline.pipeline_runner import ingest_document_to_qdrant
+from app.models.processing_job import ProcessingJob, ProcessingJobType, ProcessingJobStatus
+from app.workers.tasks import ingest_document_task
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -39,7 +40,7 @@ async def upload_document(
     file_type = file.filename.split(".")[-1] if file.filename and "." in file.filename else "unknown"
     mime_type = file.content_type or "application/octet-stream"
 
-    # Create model record with initial UPLOADING status
+    # Create model record with initial QUEUED status
     new_doc = DocumentModel(
         user_id=current_user.id,
         original_filename=file.filename or "unknown",
@@ -49,30 +50,41 @@ async def upload_document(
         mime_type=mime_type,
         file_size=file_size,
         checksum=checksum,
-        status=DocumentStatus.UPLOADING.value
+        status=DocumentStatus.QUEUED.value
     )
     db.add(new_doc)
     db.commit()
     db.refresh(new_doc)
 
-    # Run ingestion pipeline to index vector embeddings in Qdrant
+    # Create ProcessingJob record
+    job = ProcessingJob(
+        user_id=current_user.id,
+        document_id=new_doc.id,
+        job_type=ProcessingJobType.DOCUMENT_INDEXING.value,
+        status=ProcessingJobStatus.QUEUED.value
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Trigger Celery background task
     try:
-        ingest_document_to_qdrant(
+        ingest_document_task.delay(
+            job_id_str=str(job.id),
+            document_id_str=str(new_doc.id),
             file_path=storage_path,
             mime_type=mime_type,
             tenant_id=current_user.id
         )
-        new_doc.status = DocumentStatus.READY.value
-        new_doc.processed_at = func.now()
-        db.commit()
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        # If task queueing fails, mark job and document as failed
         new_doc.status = DocumentStatus.FAILED.value
+        job.status = ProcessingJobStatus.FAILED.value
+        job.error_message = f"Failed to queue task: {str(e)}"
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document upload succeeded, but vector database indexing failed: {str(e)}"
+            detail=f"Document upload succeeded, but background task queueing failed: {str(e)}"
         )
 
     return new_doc
@@ -81,12 +93,40 @@ async def upload_document(
 def list_documents(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
-) -> List[DocumentModel]:
+):
     """List all active (non-deleted) documents for the current active user."""
-    return db.query(DocumentModel).filter(
+    docs = db.query(DocumentModel).filter(
         DocumentModel.user_id == current_user.id,
         DocumentModel.deleted_at.is_(None)
     ).all()
+
+    read_docs = []
+    for doc in docs:
+        job = (
+            db.query(ProcessingJob)
+            .filter(ProcessingJob.document_id == doc.id)
+            .order_by(ProcessingJob.created_at.desc())
+            .first()
+        )
+        read_docs.append({
+            "id": doc.id,
+            "user_id": doc.user_id,
+            "original_filename": doc.original_filename,
+            "stored_filename": doc.stored_filename,
+            "storage_path": doc.storage_path,
+            "file_type": doc.file_type,
+            "mime_type": doc.mime_type,
+            "file_size": doc.file_size,
+            "checksum": doc.checksum,
+            "status": doc.status,
+            "created_at": doc.created_at,
+            "updated_at": doc.updated_at,
+            "processed_at": doc.processed_at,
+            "deleted_at": doc.deleted_at,
+            "progress": job.progress if job else (100 if doc.status == "READY" else 0),
+            "current_step": job.current_step if job else None
+        })
+    return read_docs
 
 @router.get("/{document_id}/status")
 def get_document_status(
@@ -102,11 +142,20 @@ def get_document_status(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     
+    job = (
+        db.query(ProcessingJob)
+        .filter(ProcessingJob.document_id == document_id)
+        .order_by(ProcessingJob.created_at.desc())
+        .first()
+    )
+
     return {
         "id": doc.id,
         "status": doc.status,
         "processed_at": doc.processed_at,
-        "deleted_at": doc.deleted_at
+        "deleted_at": doc.deleted_at,
+        "progress": job.progress if job else (100 if doc.status == "READY" else 0),
+        "current_step": job.current_step if job else None
     }
 
 @router.delete("/{document_id}", status_code=status.HTTP_200_OK)

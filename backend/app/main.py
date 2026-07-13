@@ -8,6 +8,9 @@ from app.api.routes.chat import router as chat_router
 from app.models.user import Base
 from app.models.document import Document
 from app.models.processing_job import ProcessingJob
+from app.models.conversation import Conversation
+from app.models.message import Message
+from app.models.chunk import Chunk
 from app.dependencies import engine
 
 # Configure logging
@@ -18,6 +21,17 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     logger.info("Initializing database tables...")
     Base.metadata.create_all(bind=engine)
+    # Add document_id column to conversations table if it doesn't exist
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                ALTER TABLE conversations 
+                ADD COLUMN IF NOT EXISTS document_id UUID REFERENCES documents(id) ON DELETE SET NULL;
+            """))
+        logger.info("Database tables initialized successfully and alter table checked.")
+    except Exception as e:
+        logger.error(f"Error checking/adding document_id column: {str(e)}")
     yield
 
 app = FastAPI(

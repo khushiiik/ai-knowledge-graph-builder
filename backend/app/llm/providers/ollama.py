@@ -15,3 +15,12 @@ class OllamaProvider:
         """
         response = self.llm.invoke(question)
         return str(response.content)
+
+    def stream(self, messages: list[tuple[str, str]]):
+        """
+        Streams the model's reply for a (role, content) message list, yielding
+        plain text chunks as they arrive instead of waiting for the full answer.
+        """
+        for chunk in self.llm.stream(messages):
+            if chunk.content:
+                yield chunk.content
