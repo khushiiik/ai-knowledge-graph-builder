@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Groq (Online LLM Model)
     GEMINI_MODEL: str = "qwen2.5:3b"  # Default to local model if not set to groq
     GROQ_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
 
     # Hugging Face
     HUGGING_FACE_API_KEY: str | None = None

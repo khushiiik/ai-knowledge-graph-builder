@@ -20,6 +20,7 @@ class MessageOut(BaseModel):
     id: uuid.UUID
     role: str
     content: str
+    sources: Optional[list] = None
     created_at: datetime
 
     class Config:

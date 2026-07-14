@@ -52,15 +52,26 @@ def _update_job_progress(db: Session, job_id: Optional[UUID], progress: int, cur
             job.status = status
         db.commit()
 
-def ensure_collection_exists(client: QdrantClient, collection_name: str, vector_size: int = 384) -> None:
+def ensure_collection_exists(client: QdrantClient, collection_name: str, vector_size: int = 3072) -> None:
     """
-    Checks if a collection exists in Qdrant. If not, creates it manually.
-    Bypasses LangChain's recreate_collection call which throws an compatibility error in qdrant-client >= 1.18.
+    Checks if a collection exists in Qdrant. If not, or if its dimension size
+    does not match the target vector_size, recreates it manually.
     """
     try:
-        client.get_collection(collection_name=collection_name)
+        info = client.get_collection(collection_name=collection_name)
+        # Check if the existing collection vectors size matches
+        current_size = info.config.params.vectors.size
+        if current_size != vector_size:
+            client.delete_collection(collection_name=collection_name)
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=qdrant_models.VectorParams(
+                    size=vector_size,
+                    distance=qdrant_models.Distance.COSINE
+                )
+            )
     except Exception:
-        # Collection does not exist, create it manually with Cosine distance and 384 dimensions (sentence-transformers size)
+        # Collection does not exist, create it manually
         client.create_collection(
             collection_name=collection_name,
             vectors_config=qdrant_models.VectorParams(
@@ -136,7 +147,7 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     client = QdrantClient(url=qdrant_url)
     
     # Ensure collection exists to bypass the LangChain recreate compatibility bug
-    ensure_collection_exists(client, COLLECTION_NAME, vector_size=384)
+    ensure_collection_exists(client, COLLECTION_NAME, vector_size=3072)
     
     vector_store = Qdrant(
         client=client,
@@ -149,6 +160,26 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
         ids=qdrant_ids
     )
 
+    # 6. Extract entities & relationships per chunk and write them into Neo4j,
+    # tagged with tenant_id so graph search stays isolated per user (same
+    # pattern as the tenant_id filter used for Qdrant above).
+    _update_job_progress(db, job_id, 97, "Extracting entities and relationships into Neo4j")
+    from app.pipeline.ner import extract_entities_and_relations
+    from app.db.neo4j_client import write_graph_data
+
+    for chunk in chunks:
+        try:
+            extraction = extract_entities_and_relations(chunk.page_content)
+            write_graph_data(
+                user_id=tenant_id,
+                source_filename=os.path.basename(file_path),
+                entities=extraction["entities"],
+                relationships=extraction["relationships"],
+            )
+        except Exception:
+            # Graph extraction is best-effort -- one bad chunk shouldn't fail the whole pipeline
+            continue
+
 def get_tenant_retriever(tenant_id: int, limit: int = 3, source_file: Optional[str] = None) -> VectorStoreRetriever:
     """
     Returns a Qdrant-backed VectorStoreRetriever pre-filtered for a specific tenant_id.
@@ -160,7 +191,7 @@ def get_tenant_retriever(tenant_id: int, limit: int = 3, source_file: Optional[s
     client = QdrantClient(url=qdrant_url)
     
     # Ensure collection exists for retrieval too
-    ensure_collection_exists(client, COLLECTION_NAME, vector_size=384)
+    ensure_collection_exists(client, COLLECTION_NAME, vector_size=3072)
 
     vector_store = Qdrant(
         client=client,

@@ -83,20 +83,29 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 ## 6. Chunking Strategy
 
 * **Decision Title**: Chunking Strategy Selection
-* **Options Considered**: Fixed-size window chunking, Semantic chunking
-* **Chosen Option**: *Pending Implementation*
-* **Rationale**: This feature is not yet present in the active codebase. 
-* **Trade-offs**: N/A
+* **Options Considered**: Fixed-size character splitter, Semantic splitter, RecursiveCharacterTextSplitter
+* **Chosen Option**: LangChain's `RecursiveCharacterTextSplitter` (chunk size 500, overlap 50).
+* **Rationale**: 
+  * Splits text recursively based on character lists (`\n\n`, `\n`, ` `), preserving paragraph structures and sentence structures much better than simple character counts.
+  * 500 characters is a balanced chunk size that fits within typical embedding context limits while preserving local context; 50 character overlap prevents boundary information loss.
+* **Trade-offs**: 
+  * Simple heuristic-based splitting compared to complex embedding-based semantic splitting.
+  * **At Scale (10,000+ users)**: Yes. Recursive character splitting scales linearly in CPU time and keeps processing speeds fast.
 
 ---
 
 ## 7. Embedding Model
 
 * **Decision Title**: Embedding Model Selection
-* **Options Considered**: API-based models (e.g. OpenAI `text-embedding-3-small`), Self-hosted models (e.g. HuggingFace sentence-transformers)
-* **Chosen Option**: *Pending Implementation*
-* **Rationale**: This feature is not yet present in the active codebase.
-* **Trade-offs**: N/A
+* **Options Considered**: API-based models (e.g. OpenAI `text-embedding-3-small`), Self-hosted models (e.g. HuggingFace sentence-transformers), Online Gemini Embeddings
+* **Chosen Option**: Online Gemini Embeddings (`gemini-embedding-001`) with 3072 dimensions.
+* **Rationale**:
+  * **Serverless Execution**: Does not require loading heavy weights locally, saving disk space (no heavy docker images) and CPU/RAM resources.
+  * **High Dimension Capacity**: 3072 dimensions provide excellent semantic representation and finer retrieval quality.
+  * **High Throughput**: Runs on Google's global serverless infrastructure, meaning instant startup and execution.
+* **Trade-offs**:
+  * Requires internet connectivity and an API key.
+  * **At Scale (10,000+ users)**: Yes. Utilizing an online API model scales seamlessly without hosting overhead.
 
 ---
 
@@ -104,9 +113,13 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: NER & Relation Extraction Strategy
 * **Options Considered**: spaCy, Fine-tuned LLM, Prompt-based LLM Extraction
-* **Chosen Option**: *Pending Implementation*
-* **Rationale**: This feature is not yet present in the active codebase.
-* **Trade-offs**: N/A
+* **Chosen Option**: Prompt-based LLM Extraction (structured JSON output).
+* **Rationale**:
+  * **Flexibility**: Prompting enables the extraction of open-domain relationship types and attributes without training custom models.
+  * **Contextual Comprehension**: Advanced LLMs are highly capable of understanding semantic nuances and identifying entity mappings correctly from unstructured paragraphs.
+* **Trade-offs**:
+  * LLM extraction is slower and more token-heavy than standard spaCy rule/statistical extraction.
+  * **At Scale (10,000+ users)**: In a high-scale deployment, we would run extraction asynchronously using a dedicated worker pool of lightweight LLMs to prevent bottlenecking the ingestion queue.
 
 ---
 
@@ -114,7 +127,7 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: LLM Selection for Generation
 * **Options Considered**: Cloud API (e.g. OpenAI GPT-4o, Anthropic Claude), Local deployment (e.g. Ollama, Llama 3, Qwen 2.5)
-* **Chosen Option**: Local deployment via **Ollama** running the **Qwen 2.5 (3B)** model.
+* **Chosen Option**: Local deployment via **Ollama** running the **Qwen 2.5 (3B)** model, fallback to Groq/Gemini APIs.
 * **Rationale**:
   * **Data Privacy & Isolation**: Keeps all user prompts and knowledge graph data local, ensuring compliance with our strict tenant isolation strategies.
   * **No API Costs**: Eliminates pay-per-token API fees, allowing infinite loops of development, testing, and retrieval generation.
@@ -129,9 +142,13 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: Result Fusion (Graph + Vector) Strategy
 * **Options Considered**: Reciprocal Rank Fusion (RRF), Weighted Merge, Re-ranker
-* **Chosen Option**: *Pending Implementation*
-* **Rationale**: This feature is not yet present in the active codebase.
-* **Trade-offs**: N/A
+* **Chosen Option**: Reciprocal Rank Fusion (RRF) with constant `k=60`.
+* **Rationale**:
+  * **Distribution Independent**: Evaluates ranks from disparate sources (dense semantic vector retrieval vs structured cypher graph matches) without requiring scores to be in the same scale.
+  * **Parameter Free**: RRF does not require complex parameter tuning, ensuring solid baseline fusion performance.
+* **Trade-offs**:
+  * Does not evaluate exact score weight relative strengths.
+  * **At Scale (10,000+ users)**: Yes. RRF scales with low computational cost and runs in constant O(N log N) rank sorting time.
 
 ---
 
@@ -139,9 +156,13 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: Task Queue Framework Selection
 * **Options Considered**: Celery + Redis, FastAPI BackgroundTasks, ARQ
-* **Chosen Option**: *Pending Implementation* (Redis is provisioned in the orchestration layer, but the Python backend framework implementation is pending)
-* **Rationale**: This feature is not yet present in the active codebase.
-* **Trade-offs**: N/A
+* **Chosen Option**: Celery with Redis broker and PostgreSQL backend.
+* **Rationale**:
+  * **Decoupled Workers**: Offloads heavy text extraction, embedding, and graph ingestion processes from the main API thread, keeping request latencies low.
+  * **Reliability**: Supports task persistence, monitoring via Flower, and automatic retries (bind=True, up to 3 retries) on ingestion failures.
+* **Trade-offs**:
+  * Introduces extra infrastructure dependencies (Celery, Redis broker).
+  * **At Scale (10,000+ users)**: Yes. Celery easily scales out horizontally by adding more worker replicas to consume from the task queue.
 
 ---
 
@@ -149,6 +170,10 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: Tool Dispatch Pattern Selection
 * **Options Considered**: Function calling, ReAct prompting, Custom router
-* **Chosen Option**: *Pending Implementation*
-* **Rationale**: This feature is not yet present in the active codebase.
-* **Trade-offs**: N/A
+* **Chosen Option**: Custom rule-based router and prompt orchestration.
+* **Rationale**:
+  * **Predictable Flow**: Bypasses the latency and cost of LLM function-calling loops by executing deterministic ingestion and retrieval pipelines directly.
+  * **Performance**: Yields responses instantly with minimal prompt setup overhead.
+* **Trade-offs**:
+  * Less dynamic in choosing arbitrary execution steps on the fly.
+  * **At Scale (10,000+ users)**: Yes. Custom rule-based dispatching scales efficiently and eliminates the risks of LLM tool hallucination.

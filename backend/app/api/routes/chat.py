@@ -14,6 +14,8 @@ from app.schemas.chat import AskRequest, ConversationOut, MessageOut
 from app.llm.providers.factory import get_llm_provider
 from app.llm.prompts.chat_prompt import build_chat_messages
 from app.retrieval.semantic_search import retrieve_chunks, build_context_block
+from app.retrieval.graph_search import graph_search
+from app.retrieval.fusion import reciprocal_rank_fusion
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -57,30 +59,65 @@ def ask_question(
     """
     conversation = _get_or_create_conversation(db, current_user, payload.conversation_id)
 
+    # 1. Fetch conversation history for memory before persisting current message
+    db_messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation.id)
+        .order_by(Message.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    db_messages.reverse()
+    history = []
+    for msg in db_messages:
+        role = "human" if msg.role == "user" else "ai"
+        history.append((role, msg.content))
+
+    # Add the current user question to the database
     db.add(Message(conversation_id=conversation.id, role=MessageRole.USER.value, content=payload.question))
-    if conversation.title is None:
-        conversation.title = payload.question[:80]
+    
+    # 2. LLM-based Title Generation (if None or default title is present)
+    if conversation.title is None or conversation.title.startswith("New Semantic Session"):
+        try:
+            title_prompt = [
+                (
+                    "system",
+                    "You are a helpful assistant. Generate a short, concise 3-to-5 word title summarizing the user's question. Do not use quotes or markdown. Return only the title text.",
+                ),
+                ("human", payload.question),
+            ]
+            provider = get_llm_provider()
+            generated = provider.llm.invoke(title_prompt)
+            conversation.title = str(generated.content).replace('"', '').replace("'", "").strip()[:80]
+        except Exception:
+            conversation.title = payload.question[:80]
+            
     db.commit()
 
     # Extract primitive values before the request-scoped session closes
     conversation_id = conversation.id
     conversation_id_str = str(conversation_id)
 
-    # 1. Fetch active documents for this user
+    # 3. Fetch active documents for this user
     from app.models.document import Document as DocumentModel
     docs = db.query(DocumentModel).filter(
         DocumentModel.user_id == current_user.id,
         DocumentModel.deleted_at.is_(None)
     ).all()
 
-    # 2. Check if a document is mentioned in the query (updates conversation document focus)
+    # 4. Check if a document is mentioned in the query (updates conversation document focus)
     import os
+    import re
     matched_doc = None
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
     for doc in sorted_docs:
         no_ext = os.path.splitext(doc.original_filename)[0]
+        # Strip copy suffixes like " (1)", " (2)" from filename before matching
+        cleaned_no_ext = re.sub(r'\s*\(\d+\)\s*$', '', no_ext)
+        
         if (doc.original_filename.lower() in payload.question.lower()) or \
-           (len(no_ext) > 3 and no_ext.lower() in payload.question.lower()):
+           (len(no_ext) > 3 and no_ext.lower() in payload.question.lower()) or \
+           (len(cleaned_no_ext) > 3 and cleaned_no_ext.lower() in payload.question.lower()):
             matched_doc = doc
             break
 
@@ -88,7 +125,48 @@ def ask_question(
         conversation.document_id = matched_doc.id
         db.commit()
 
-    # 3. Determine active document filter
+    # Check if this query is about "the document" (ambiguous)
+    is_ambiguous_doc_query = bool(re.search(
+        r'\b(this|the|that|my|your|uploaded)?\s*(document|pdf|file|paper|sheet|text|data)\b', 
+        payload.question.lower()
+    ))
+
+    # Auto-focus if only 1 document is uploaded and no focus is set
+    if not conversation.document_id and len(docs) == 1:
+        conversation.document_id = docs[0].id
+        db.commit()
+
+    # Stream clarification message if ambiguous query and multiple docs are uploaded with no focus
+    if not conversation.document_id and len(docs) > 1 and is_ambiguous_doc_query:
+        file_list_str = "\n".join(f"- {d.original_filename}" for d in docs)
+        clarification_msg = (
+            f"I see you have multiple documents uploaded. Which document are you referring to?\n\n"
+            f"{file_list_str}\n\n"
+            f"Please type the name of the document so I can focus on it."
+        )
+        
+        def clarification_stream():
+            yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+            yield f"data: {json.dumps({'token': clarification_msg})}\n\n"
+            
+            session = SessionLocal()
+            try:
+                session.add(
+                    Message(
+                        conversation_id=conversation_id,
+                        role=MessageRole.ASSISTANT.value,
+                        content=clarification_msg,
+                        sources=None
+                    )
+                )
+                session.commit()
+            finally:
+                session.close()
+            yield "event: done\ndata: {}\n\n"
+
+        return StreamingResponse(clarification_stream(), media_type="text/event-stream")
+
+    # 5. Determine active document filter
     source_file = None
     document_in_focus = None
     if conversation.document_id:
@@ -97,15 +175,19 @@ def ask_question(
             source_file = doc.stored_filename
             document_in_focus = doc.original_filename
 
-    # 4. Build list of uploaded files to provide system template context
+    # 6. Build list of uploaded files to provide system template context
     uploaded_files_list = [d.original_filename for d in docs]
 
-    # 5. Retrieve chunks and construct LLM prompts
-    chunks = retrieve_chunks(payload.question, tenant_id=current_user.id, limit=4, source_file=source_file)
+    # 7. Retrieve chunks (Qdrant) and related facts (Neo4j graph), then fuse
+    semantic_chunks = retrieve_chunks(payload.question, tenant_id=current_user.id, limit=4, source_file=source_file)
+    graph_facts = graph_search(payload.question, tenant_id=current_user.id, limit=5, source_file=source_file)
+    chunks = reciprocal_rank_fusion([semantic_chunks, graph_facts], top_n=6)
+
     context = build_context_block(chunks)
     messages = build_chat_messages(
         context,
         payload.question,
+        history=history,
         uploaded_files_list=uploaded_files_list,
         document_in_focus=document_in_focus
     )
@@ -114,8 +196,19 @@ def ask_question(
 
     def event_stream():
         # First event tells the client which conversation this reply belongs to
-        # (important the very first time, when no conversation_id was sent yet).
         yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+
+        # Stream citation details at the start
+        source_data = [
+            {
+                "text": c.get("text"),
+                "source": c.get("source"),
+                "page": c.get("page"),
+                "type": c.get("type", "semantic")
+            }
+            for c in chunks
+        ]
+        yield f"event: sources\ndata: {json.dumps({'sources': source_data})}\n\n"
 
         full_answer = ""
         try:
@@ -126,9 +219,6 @@ def ask_question(
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        # Use a fresh session here rather than the request-scoped `db` above --
-        # that one belongs to the request lifecycle and may already be torn
-        # down by the time this generator finishes streaming to the client.
         session = SessionLocal()
         try:
             session.add(
@@ -136,7 +226,7 @@ def ask_question(
                     conversation_id=conversation_id,
                     role=MessageRole.ASSISTANT.value,
                     content=full_answer,
-                    sources=[{"source": c["source"]} for c in chunks] or None,
+                    sources=source_data or None,
                 )
             )
             session.commit()

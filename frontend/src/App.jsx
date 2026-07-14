@@ -132,6 +132,83 @@ export default function App() {
     localStorage.setItem('vectra_conversations', JSON.stringify(conversations));
   }, [conversations]);
 
+  // Fetch conversations list from database
+  const fetchConversations = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/chat/conversations', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.length > 0) {
+          const mapped = data.map(c => ({
+            id: c.id,
+            title: c.title || "Untitled Conversation",
+            messages: [] // Lazily loaded when selected
+          }));
+          setConversations(mapped);
+          
+          // Auto-select first conversation
+          const savedActiveId = localStorage.getItem('vectra_active_conversation_id');
+          if (savedActiveId && mapped.some(c => c.id === savedActiveId)) {
+            setActiveConversationId(savedActiveId);
+          } else {
+            setActiveConversationId(mapped[0].id);
+          }
+        } else {
+          // Fallback default
+          setConversations([
+            {
+              id: "conv-1",
+              title: "Project Architecture Extraction",
+              messages: [
+                { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
+              ]
+            }
+          ]);
+          setActiveConversationId("conv-1");
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch conversations:', err);
+    }
+  };
+
+  // Fetch messages for a specific conversation
+  const fetchConversationMessages = async (convId) => {
+    if (!authToken || !convId || convId.startsWith("conv-")) return;
+    try {
+      const res = await fetch(`/chat/conversations/${convId}/messages`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const mappedMsgs = data.map(m => ({
+          sender: m.role, // 'user' -> 'user', 'assistant' -> 'assistant'
+          text: m.content,
+          sources: m.sources
+        }));
+        
+        if (mappedMsgs.length === 0) {
+          mappedMsgs.push({
+            sender: "assistant",
+            text: "Hello! Started a new session. Upload files or ask me anything."
+          });
+        }
+
+        setConversations(prev => prev.map(c => {
+          if (c.id === convId) {
+            return { ...c, messages: mappedMsgs };
+          }
+          return c;
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to fetch messages:', err);
+    }
+  };
+
   // Fetch documents from backend dynamically
   const fetchDocuments = async () => {
     if (!authToken) return;
@@ -160,8 +237,21 @@ export default function App() {
   useEffect(() => {
     if (authToken) {
       fetchDocuments();
+      fetchConversations();
     }
   }, [authToken]);
+
+  useEffect(() => {
+    if (activeConversationId) {
+      localStorage.setItem('vectra_active_conversation_id', activeConversationId);
+      if (!activeConversationId.startsWith("conv-")) {
+        const active = conversations.find(c => c.id === activeConversationId);
+        if (active && (!active.messages || active.messages.length === 0)) {
+          fetchConversationMessages(activeConversationId);
+        }
+      }
+    }
+  }, [activeConversationId, authToken]);
 
   // Poll for processing documents every 3 seconds
   useEffect(() => {
@@ -293,6 +383,20 @@ export default function App() {
     setEmail('');
     setPassword('');
     setFullName('');
+    setConversations([
+      {
+        id: "conv-1",
+        title: "Project Architecture Extraction",
+        messages: [
+          { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
+        ]
+      }
+    ]);
+    setActiveConversationId("conv-1");
+    localStorage.removeItem('vectra_auth_token');
+    localStorage.removeItem('vectra_login_user');
+    localStorage.removeItem('vectra_conversations');
+    localStorage.removeItem('vectra_active_conversation_id');
   };
 
   // Create new conversation (creates conversation but does not expand the sidebar)
@@ -395,15 +499,49 @@ export default function App() {
           if (trimmed.startsWith("data: ")) {
             try {
               const payload = JSON.parse(trimmed.slice(6));
+              
+              if (payload.conversation_id) {
+                const dbId = payload.conversation_id;
+                setConversations(prev => prev.map(c => {
+                  if (c.id === activeConversationId) {
+                    return { ...c, id: dbId };
+                  }
+                  return c;
+                }));
+                setActiveConversationId(dbId);
+              }
+
+              if (payload.sources) {
+                setConversations(prev => prev.map(c => {
+                  const targetId = payload.conversation_id || activeConversationId;
+                  if (c.id === targetId || c.id === activeConversationId) {
+                    const msgs = [...c.messages];
+                    if (msgs.length > 0) {
+                      msgs[msgs.length - 1] = {
+                        ...msgs[msgs.length - 1],
+                        sources: payload.sources
+                      };
+                    }
+                    return { ...c, messages: msgs };
+                  }
+                  return c;
+                }));
+              }
+
               if (payload.token) {
                 fullAnswer += payload.token;
 
                 // Update assistant message with accumulated tokens
                 setConversations(prev => prev.map(c => {
-                  if (c.id === activeConversationId) {
+                  const targetId = payload.conversation_id || activeConversationId;
+                  if (c.id === targetId || c.id === activeConversationId) {
                     const msgs = [...c.messages];
                     if (msgs.length > 0) {
-                      msgs[msgs.length - 1] = { sender: "assistant", text: fullAnswer };
+                      msgs[msgs.length - 1] = {
+                        ...msgs[msgs.length - 1],
+                        sender: "assistant",
+                        text: fullAnswer
+                      };
                     }
                     return { ...c, messages: msgs };
                   }
@@ -680,7 +818,7 @@ export default function App() {
                 </div>
               ) : (
                 /* Expanded Sidebar Mode: Hide original buttons and show chat listing (Gemini style) */
-                <div className="chat-list-container" style={{ display: 'flex', width: '100%' }}>
+                <div className="chat-list-container" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <span style={{ fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.5px', textTransform: 'uppercase', opacity: 0.8 }}>Chats</span>
                     <button 
@@ -730,7 +868,7 @@ export default function App() {
                           style={{ display: 'flex', justifyContent: 'space-between', paddingRight: '12px' }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexGrow: 1, overflow: 'hidden' }}>
-                            <MessageSquare size={16} />
+                            <MessageSquare size={16} style={{ flexShrink: 0 }} />
                             {editingConvId === conv.id ? (
                               <input 
                                 type="text"
@@ -776,7 +914,7 @@ export default function App() {
                               }}
                               title="Rename chat"
                             >
-                              <Edit2 size={13} />
+                              <Edit2 size={13} style={{ flexShrink: 0 }} />
                             </button>
                           )}
                         </div>
@@ -941,6 +1079,13 @@ export default function App() {
                   </div>
 
                 </div>
+
+                {isUploading && (
+                  <div className="upload-status" style={{ maxWidth: '400px', margin: '24px auto 0 auto' }}>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>{uploadProgress}</span>
+                  </div>
+                )}
               </div>
             ) : (
               /* Active Chat Window View */
@@ -949,15 +1094,52 @@ export default function App() {
                   <div 
                     key={i} 
                     className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'}`}
-                    style={{ whiteSpace: 'pre-line' }}
+                    style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
                   >
-                    {msg.text}
+                    <div style={{ whiteSpace: 'pre-line' }}>{msg.text}</div>
+                    {msg.sender === 'assistant' && msg.sources && msg.sources.length > 0 && (
+                      <div className="citations-container" style={{ marginTop: '8px', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: '8px', width: '100%' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Sources:</div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {msg.sources.map((src, sIdx) => {
+                            const name = src.source;
+                            const pageText = src.page !== null && src.page !== undefined ? ` (Page ${src.page + 1})` : '';
+                            const typeText = src.type === 'graph' ? ' [Graph Fact]' : '';
+                            return (
+                              <div 
+                                key={sIdx} 
+                                className="citation-badge"
+                                title={src.text}
+                                onClick={() => alert(`Citation passage:\n"${src.text}"`)}
+                                style={{ 
+                                  fontSize: '0.72rem', 
+                                  background: 'rgba(255,255,255,0.6)', 
+                                  border: '1px solid var(--glass-border)', 
+                                  padding: '4px 8px', 
+                                  borderRadius: '6px', 
+                                  cursor: 'pointer',
+                                  color: 'var(--black-magic)'
+                                }}
+                              >
+                                {name}{pageText}{typeText}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
+                {isUploading && (
+                  <div className="message-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(79, 70, 229, 0.1)', borderColor: 'var(--accent-color)' }}>
+                    <Loader2 size={16} className="animate-spin text-accent" />
+                    <span style={{ fontWeight: 500 }}>{uploadProgress}</span>
+                  </div>
+                )}
                 {isLlmGenerating && (
                   <div className="message-bubble assistant" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Loader2 size={16} className="animate-spin" />
-                    <span>Querying Vectra AI knowledge indices in Qdrant...</span>
+                    <Loader2 size={16} className="animate-spin text-accent" />
+                    <span style={{ fontStyle: 'italic', color: 'var(--text-muted)' }}>Vectra AI is thinking...</span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />

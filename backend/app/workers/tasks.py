@@ -7,8 +7,13 @@ from app.models.processing_job import ProcessingJob, ProcessingJobStatus
 from app.models.document import Document, DocumentStatus
 from app.pipeline.pipeline_runner import ingest_document_to_qdrant
 
-@celery_app.task(name="app.workers.tasks.ingest_document_task")
-def ingest_document_task(job_id_str: str, document_id_str: str, file_path: str, mime_type: str, tenant_id: int):
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.ingest_document_task",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 3, "countdown": 5}
+)
+def ingest_document_task(self, job_id_str: str, document_id_str: str, file_path: str, mime_type: str, tenant_id: int):
     db: Session = SessionLocal()
     job_id = uuid.UUID(job_id_str)
     document_id = uuid.UUID(document_id_str)
@@ -40,10 +45,20 @@ def ingest_document_task(job_id_str: str, document_id_str: str, file_path: str, 
         db.commit()
         
     except Exception as e:
+        db.rollback()
+        # If we have retries left, raise the exception to let Celery retry
+        if self.request.retries < self.max_retries:
+            job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
+            if job:
+                job.current_step = f"Retrying (Attempt {self.request.retries + 1}/{self.max_retries})"
+                db.commit()
+            db.close()
+            raise e
+
         import traceback
         traceback.print_exc()
         
-        # Update Document and Job status to failed
+        # Update Document and Job status to failed when all retries are exhausted
         doc = db.query(Document).filter(Document.id == document_id).first()
         if doc:
             doc.status = DocumentStatus.FAILED.value

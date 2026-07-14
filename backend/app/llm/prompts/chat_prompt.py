@@ -13,6 +13,7 @@ SYSTEM_TEMPLATE = (
 def build_chat_messages(
     context: str,
     question: str,
+    history: List[Tuple[str, str]] = None,
     uploaded_files_list: List[str] = None,
     document_in_focus: str = None
 ) -> List[Tuple[str, str]]:
@@ -20,7 +21,7 @@ def build_chat_messages(
     files_str = ", ".join(uploaded_files_list) if uploaded_files_list else "None"
     focus_str = document_in_focus if document_in_focus else "All documents"
 
-    return [
+    messages = [
         (
             "system",
             SYSTEM_TEMPLATE.format(
@@ -28,6 +29,9 @@ def build_chat_messages(
                 uploaded_files_list=files_str,
                 document_in_focus=focus_str,
             ),
-        ),
-        ("human", question),
+        )
     ]
+    if history:
+        messages.extend(history)
+    messages.append(("human", question))
+    return messages
