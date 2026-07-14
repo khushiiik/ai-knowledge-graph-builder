@@ -5,6 +5,9 @@ from typing import List
 import qdrant_client
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
+from app.models.processing_job import ProcessingJob
+from app.pipeline.ner import extract_entities_and_relations
+from app.db.neo4j_client import write_graph_data
 
 # Patch QdrantClient to support the legacy search method used by langchain_community
 if not hasattr(qdrant_client.QdrantClient, "search"):
@@ -43,7 +46,6 @@ COLLECTION_NAME = "shared_knowledge_graph"
 def _update_job_progress(db: Session, job_id: Optional[UUID], progress: int, current_step: str, status: Optional[str] = None):
     if not job_id:
         return
-    from app.models.processing_job import ProcessingJob
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
     if job:
         job.progress = progress
@@ -165,12 +167,8 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
         ids=qdrant_ids
     )
 
-    # 6. Extract entities & relationships per chunk and write them into Neo4j,
-    # tagged with tenant_id so graph search stays isolated per user (same
-    # pattern as the tenant_id filter used for Qdrant above).
+    # 6. Extract entities & relationships per chunk and write them into Neo4j
     _update_job_progress(db, job_id, 97, "Extracting entities and relationships into Neo4j")
-    from app.pipeline.ner import extract_entities_and_relations
-    from app.db.neo4j_client import write_graph_data
 
     for chunk in chunks:
         try:

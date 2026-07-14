@@ -1,5 +1,6 @@
 import os
-from fastapi import UploadFile, HTTPException, Request, status
+from fastapi import UploadFile, Request
+from app.core.exceptions import FileExceedsLimitException, InvalidFileExtensionException, InvalidMimeTypeException
 
 MAX_FILE_SIZE_MB = 51
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
@@ -45,10 +46,7 @@ def validate_uploaded_file(file: UploadFile, request: Request = None) -> None:
             try:
                 size = int(content_length)
                 if size > MAX_FILE_SIZE_BYTES:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File size exceeds the {MAX_FILE_SIZE_MB - 1}MB limit (via Content-Length).",
-                    )
+                    raise FileExceedsLimitException(limit_mb=MAX_FILE_SIZE_MB - 1, is_physical=False)
             except ValueError:
                 pass
 
@@ -56,18 +54,12 @@ def validate_uploaded_file(file: UploadFile, request: Request = None) -> None:
     filename = file.filename or ""
     ext = os.path.splitext(filename.lower())[1]
     if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File extension '{ext}' is not allowed. Supported formats: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
-        )
+        raise InvalidFileExtensionException(ext=ext, allowed=list(ALLOWED_EXTENSIONS))
 
     # 3. MIME type validation
     mime_type = file.content_type
     if not mime_type or mime_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"MIME type '{mime_type}' is not allowed. Supported formats: PDF, DOCX, TXT, CSV, XLSX, JSON, Markdown.",
-        )
+        raise InvalidMimeTypeException(mime_type=mime_type)
 
     # 4. Chunk validation (Safety check against fake/altered Content-Length headers)
     # Stream the file to ensure memory consumption stays extremely low
@@ -78,30 +70,8 @@ def validate_uploaded_file(file: UploadFile, request: Request = None) -> None:
     while chunk := file.file.read(chunk_size):
         total_size += len(chunk)
         if total_size > MAX_FILE_SIZE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File size physically exceeds the {MAX_FILE_SIZE_MB}MB limit.",
-            )
+            raise FileExceedsLimitException(limit_mb=MAX_FILE_SIZE_MB, is_physical=True)
 
     # Reset seek pointer for next operations
     file.file.seek(0)
 
-
-# Multi-Tenancy Collection Sharing architectural guidelines:
-#
-# To isolate user data safely within one single shared collection in Qdrant:
-# 1. Separate documents by appending a payload filter, e.g., 'tenant_id': user_id (or user_id directly).
-# 2. Inject this filter into a Search Wrapper. When performing search queries:
-#
-#    def search_tenant_documents(query_vector, tenant_id: int, top_k: int = 5):
-#        tenant_filter = Filter(
-#            must=[
-#                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
-#            ]
-#        )
-#        return qdrant_client.search(
-#            collection_name="shared_knowledge_graph",
-#            query_vector=query_vector,
-#            query_filter=tenant_filter,
-#            limit=top_k
-#        )

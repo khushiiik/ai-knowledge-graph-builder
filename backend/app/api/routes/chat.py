@@ -1,10 +1,13 @@
 import json
 import uuid
+import os
+import re
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status, HTTPException
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
+from app.core.exceptions import ConversationNotFoundException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from langchain_core.prompts import ChatPromptTemplate
@@ -36,7 +39,7 @@ def _get_or_create_conversation(
             .first()
         )
         if not conversation:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+            raise ConversationNotFoundException()
         return conversation
 
     conversation = Conversation(user_id=user.id)
@@ -106,15 +109,12 @@ def ask_question(
     conversation_id_str = str(conversation_id)
 
     # 3. Fetch active documents for this user
-    from app.models.document import Document as DocumentModel
     docs = db.query(DocumentModel).filter(
         DocumentModel.user_id == current_user.id,
         DocumentModel.deleted_at.is_(None)
     ).all()
 
     # 4. Check if a document is mentioned in the query (updates conversation document focus)
-    import os
-    import re
     matched_doc = None
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
     for doc in sorted_docs:
@@ -271,7 +271,7 @@ def get_conversation_messages(
         .first()
     )
     if not conversation:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+        raise ConversationNotFoundException()
     return conversation.messages
 
 
@@ -288,7 +288,7 @@ def delete_conversation(
         .first()
     )
     if not conversation:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+        raise ConversationNotFoundException()
     
     db.delete(conversation)
     db.commit()

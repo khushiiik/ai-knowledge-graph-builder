@@ -1,8 +1,16 @@
 from typing import Annotated, List
 from uuid import UUID
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
+from fastapi import APIRouter, Depends, UploadFile, File, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qdrant_models
+
+from app.core.exceptions import DocumentNotFoundException, FileStorageSaveException, IngestionQueueException
+from app.config import settings
+from app.models.chunk import Chunk as ChunkModel
+from app.db.neo4j_client import delete_document_facts
+from app.pipeline.pipeline_runner import COLLECTION_NAME
 
 from app.dependencies import get_db, get_current_active_user
 from app.models.user import User as UserModel
@@ -31,10 +39,7 @@ async def upload_document(
         # Save file to storage
         stored_filename, storage_path, file_size, checksum = save_upload_file(file)
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save uploaded file: {str(e)}"
-        )
+        raise FileStorageSaveException(str(e))
 
     # Determine file type / extension
     file_type = file.filename.split(".")[-1] if file.filename and "." in file.filename else "unknown"
@@ -72,8 +77,6 @@ async def upload_document(
         ingest_document_task.delay(
             job_id_str=str(job.id),
             document_id_str=str(new_doc.id),
-            file_path=storage_path,
-            mime_type=mime_type,
             tenant_id=current_user.id
         )
     except Exception as e:
@@ -82,10 +85,7 @@ async def upload_document(
         job.status = ProcessingJobStatus.FAILED.value
         job.error_message = f"Failed to queue task: {str(e)}"
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Document upload succeeded, but background task queueing failed: {str(e)}"
-        )
+        raise IngestionQueueException(str(e))
 
     return new_doc
 
@@ -141,7 +141,7 @@ def get_document_status(
         DocumentModel.user_id == current_user.id
     ).first()
     if not doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        raise DocumentNotFoundException()
     
     job = (
         db.query(ProcessingJob)
@@ -173,22 +173,16 @@ def delete_document(
     ).first()
     
     if not doc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        raise DocumentNotFoundException()
 
     # 1. Delete physical file from storage
     delete_stored_file(doc.storage_path)
 
     # 2. Delete PostgreSQL Chunks
-    from app.models.chunk import Chunk as ChunkModel
     db.query(ChunkModel).filter(ChunkModel.document_id == document_id).delete()
 
     # 3. Delete from Qdrant Vector database
     try:
-        from qdrant_client import QdrantClient
-        from qdrant_client.http import models as qdrant_models
-        from app.pipeline.pipeline_runner import COLLECTION_NAME
-        from app.config import settings
-
         qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
         client = QdrantClient(url=qdrant_url)
         client.delete(
@@ -213,7 +207,6 @@ def delete_document(
 
     # 4. Delete from Neo4j Graph database
     try:
-        from app.db.neo4j_client import delete_document_facts
         delete_document_facts(user_id=current_user.id, source_file=doc.original_filename)
     except Exception as ne:
         print(f"Error deleting Neo4j facts: {ne}")
