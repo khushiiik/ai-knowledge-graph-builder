@@ -1,7 +1,7 @@
 import requests
 import time
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8001"
 
 def test_rag_flow():
     print("--- STARTING RAG FLOW INTEGRATION TEST ---")
@@ -60,15 +60,24 @@ def test_rag_flow():
     question = "Who designed and created the Antigravity assistant?"
     print(f"Asking LLM: '{question}'...")
     
+    import json
     res = requests.post(f"{BASE_URL}/chat/ask", headers=headers, json={
         "question": question
-    })
+    }, stream=True)
     
     assert res.status_code == 200, f"Chat failed: {res.text}"
-    answer_data = res.json()
-    print("\n--- LLM ANSWER ---")
-    print(answer_data["answer"])
-    print("------------------\n")
+    print("\n--- LLM ANSWER (STREAMING) ---")
+    for line in res.iter_lines():
+        if line:
+            decoded_line = line.decode("utf-8")
+            if decoded_line.startswith("data: "):
+                try:
+                    data = json.loads(decoded_line[6:])
+                    if "token" in data:
+                        print(data["token"], end="", flush=True)
+                except Exception:
+                    pass
+    print("\n------------------------------\n")
 
 if __name__ == "__main__":
     test_rag_flow()
