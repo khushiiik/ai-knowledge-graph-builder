@@ -124,7 +124,8 @@ def list_documents(
             "processed_at": doc.processed_at,
             "deleted_at": doc.deleted_at,
             "progress": job.progress if job else (100 if doc.status == "READY" else 0),
-            "current_step": job.current_step if job else None
+            "current_step": job.current_step if job else None,
+            "error_message": job.error_message if job else None
         })
     return read_docs
 
@@ -164,7 +165,7 @@ def delete_document(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
 ):
-    """Soft delete a document (updates status to DELETED and deletes the file from local storage)."""
+    """Soft delete a document (updates status to DELETED and deletes chunks/facts from PostgreSQL, Qdrant, and Neo4j)."""
     doc = db.query(DocumentModel).filter(
         DocumentModel.id == document_id,
         DocumentModel.user_id == current_user.id,
@@ -174,12 +175,52 @@ def delete_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
 
-    # Delete physical file from storage
+    # 1. Delete physical file from storage
     delete_stored_file(doc.storage_path)
 
-    # Perform soft delete in database
+    # 2. Delete PostgreSQL Chunks
+    from app.models.chunk import Chunk as ChunkModel
+    db.query(ChunkModel).filter(ChunkModel.document_id == document_id).delete()
+
+    # 3. Delete from Qdrant Vector database
+    try:
+        from qdrant_client import QdrantClient
+        from qdrant_client.http import models as qdrant_models
+        from app.pipeline.pipeline_runner import COLLECTION_NAME
+        from app.config import settings
+
+        qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
+        client = QdrantClient(url=qdrant_url)
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=qdrant_models.FilterSelector(
+                filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="metadata.source_file",
+                            match=qdrant_models.MatchValue(value=doc.original_filename)
+                        ),
+                        qdrant_models.FieldCondition(
+                            key="metadata.tenant_id",
+                            match=qdrant_models.MatchValue(value=current_user.id)
+                        )
+                    ]
+                )
+            )
+        )
+    except Exception as qe:
+        print(f"Error deleting Qdrant vectors: {qe}")
+
+    # 4. Delete from Neo4j Graph database
+    try:
+        from app.db.neo4j_client import delete_document_facts
+        delete_document_facts(user_id=current_user.id, source_file=doc.original_filename)
+    except Exception as ne:
+        print(f"Error deleting Neo4j facts: {ne}")
+
+    # 5. Perform soft delete in database for the Document record
     doc.status = DocumentStatus.DELETED.value
     doc.deleted_at = func.now()
     db.commit()
 
-    return {"message": "Document deleted successfully"}
+    return {"message": "Document and all matching vector/graph chunks deleted successfully"}

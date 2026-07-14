@@ -96,6 +96,11 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     if not docs:
         return
 
+    # Sanitize document text to prevent ValueError: A string literal cannot contain NUL (0x00) characters.
+    for doc in docs:
+        if doc.page_content:
+            doc.page_content = doc.page_content.replace('\x00', '').replace('\u0000', '')
+
     # 2. Update Document record with raw extracted text in Postgres
     _update_job_progress(db, job_id, 30, "Saving raw text to database")
     raw_text = "\n".join([doc.page_content for doc in docs])

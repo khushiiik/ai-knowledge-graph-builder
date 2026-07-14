@@ -103,3 +103,30 @@ def query_document_facts(user_id: int, source_file: str, limit: int = 10) -> Lis
             limit=limit,
         )
         return [dict(record) for record in result]
+
+
+def delete_document_facts(user_id: int, source_file: str) -> None:
+    """
+    Deletes all relationships and orphaned entity nodes associated with a specific document.
+    """
+    driver = get_neo4j_driver()
+    with driver.session() as session:
+        # Delete relationships
+        session.run(
+            """
+            MATCH (a:Entity {userId: $user_id})-[r:RELATES_TO {userId: $user_id, sourceDocument: $source_file}]->(b:Entity {userId: $user_id})
+            DELETE r
+            """,
+            user_id=user_id,
+            source_file=source_file
+        )
+        # Delete orphaned nodes
+        session.run(
+            """
+            MATCH (e:Entity {userId: $user_id})
+            WHERE e.lastSeenDocument = $source_file AND NOT (e)-[:RELATES_TO]-()
+            DELETE e
+            """,
+            user_id=user_id,
+            source_file=source_file
+        )

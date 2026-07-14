@@ -143,8 +143,9 @@ body {
   align-items: center;
   gap: 20px;
   width: 100%;
-  max-height: calc(100% - 150px);
+  flex-grow: 1;
   overflow: hidden;
+  height: calc(100% - 110px);
 }
 
 .sidebar.expanded .sidebar-top {
@@ -1035,4 +1036,21 @@ body {
 .popover-item-logout:hover {
   background: #fee2e2;
   color: #ef4444;
+}
+
+/* Streaming pulse glow animation */
+@keyframes pulseGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(79, 70, 229, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
+  }
+}
+
+.input-send-btn.pulse {
+  animation: pulseGlow 1.5s infinite;
 }

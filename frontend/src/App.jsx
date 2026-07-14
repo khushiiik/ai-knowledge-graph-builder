@@ -62,6 +62,8 @@ export default function App() {
   const fileInputRef = useRef(null);
   const chatInputRef = useRef(null);
   const messagesEndRef = useRef(null);
+  const activeReaderRef = useRef(null);
+  const prevDocsRef = useRef([]);
 
   // Load initial conversations from LocalStorage or default
   const [conversations, setConversations] = useState(() => {
@@ -139,36 +141,40 @@ export default function App() {
       const res = await fetch('/chat/conversations', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
-        if (data.length > 0) {
-          const mapped = data.map(c => ({
-            id: c.id,
-            title: c.title || "Untitled Conversation",
-            messages: [] // Lazily loaded when selected
-          }));
-          setConversations(mapped);
+        const mapped = data.map(c => ({
+          id: c.id,
+          title: c.title || "Untitled Conversation",
+          messages: [] // Lazily loaded when selected
+        }));
+
+        setConversations(prev => {
+          // Keep unsaved conversations (starting with conv-)
+          const unsaved = prev.filter(c => c.id.startsWith("conv-"));
+          const combined = [...unsaved];
           
-          // Auto-select first conversation
-          const savedActiveId = localStorage.getItem('vectra_active_conversation_id');
-          if (savedActiveId && mapped.some(c => c.id === savedActiveId)) {
-            setActiveConversationId(savedActiveId);
-          } else {
-            setActiveConversationId(mapped[0].id);
-          }
-        } else {
-          // Fallback default
-          setConversations([
-            {
-              id: "conv-1",
-              title: "Project Architecture Extraction",
-              messages: [
-                { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
-              ]
+          // Add database conversations, avoiding duplicates
+          mapped.forEach(mc => {
+            if (!combined.some(c => c.id === mc.id)) {
+              combined.push(mc);
             }
-          ]);
-          setActiveConversationId("conv-1");
-        }
+          });
+
+          // Restore active conversation ID
+          const savedActiveId = localStorage.getItem('vectra_active_conversation_id');
+          if (savedActiveId && combined.some(c => c.id === savedActiveId)) {
+            setActiveConversationId(savedActiveId);
+          } else if (combined.length > 0) {
+            setActiveConversationId(combined[0].id);
+          }
+
+          return combined;
+        });
       }
     } catch (err) {
       console.error('Failed to fetch conversations:', err);
@@ -182,6 +188,10 @@ export default function App() {
       const res = await fetch(`/chat/conversations/${convId}/messages`, {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         const mappedMsgs = data.map(m => ({
@@ -216,6 +226,10 @@ export default function App() {
       const res = await fetch('/documents', {
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         const mapped = data.map(doc => ({
@@ -225,7 +239,8 @@ export default function App() {
           type: doc.file_type.toUpperCase(),
           status: doc.status,
           progress: doc.progress || 0,
-          currentStep: doc.current_step || ''
+          currentStep: doc.current_step || '',
+          errorMessage: doc.error_message || ''
         }));
         setDocuments(mapped);
       }
@@ -252,6 +267,48 @@ export default function App() {
       }
     }
   }, [activeConversationId, authToken]);
+
+  // Handle visual banners when background tasks transition to READY or FAILED
+  useEffect(() => {
+    const prevDocs = prevDocsRef.current;
+    if (prevDocs && prevDocs.length > 0 && documents.length > 0) {
+      documents.forEach(doc => {
+        const prev = prevDocs.find(p => p.id === doc.id);
+        if (prev) {
+          if (prev.status !== 'READY' && doc.status === 'READY') {
+            const notice = document.getElementById('upload-notice');
+            if (notice) {
+              notice.querySelector('span').innerText = `"${doc.name}" successfully processed & indexed in databases!`;
+              notice.style.background = '';
+              notice.style.borderColor = '';
+              notice.style.color = '';
+              notice.style.display = 'flex';
+              setTimeout(() => {
+                notice.style.display = 'none';
+              }, 4000);
+            }
+          }
+          if (prev.status !== 'FAILED' && doc.status === 'FAILED') {
+            const notice = document.getElementById('upload-notice');
+            if (notice) {
+              notice.querySelector('span').innerText = `"${doc.name}" ingestion failed: ${doc.errorMessage || 'Unknown error'}`;
+              notice.style.background = 'rgba(239, 68, 68, 0.15)';
+              notice.style.borderColor = '#ef4444';
+              notice.style.color = '#b91c1c';
+              notice.style.display = 'flex';
+              setTimeout(() => {
+                notice.style.display = 'none';
+                notice.style.background = '';
+                notice.style.borderColor = '';
+                notice.style.color = '';
+              }, 6000);
+            }
+          }
+        }
+      });
+    }
+    prevDocsRef.current = documents;
+  }, [documents]);
 
   // Poll for processing documents every 3 seconds
   useEffect(() => {
@@ -413,23 +470,51 @@ export default function App() {
     setActiveConversationId(newId);
   };
 
-  // Start renaming a conversation
-  const startRename = (convId, currentTitle) => {
-    setEditingConvId(convId);
-    setEditingTitle(currentTitle);
+  // Delete a conversation from db and local state
+  const deleteConversation = async (e, convId) => {
+    e.stopPropagation();
+    if (confirm("Are you sure you want to delete this conversation?")) {
+      if (!convId.startsWith("conv-") && authToken) {
+        try {
+          const res = await fetch(`/chat/conversations/${convId}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${authToken}`
+            }
+          });
+          if (res.status === 401) {
+            handleLogout();
+            return;
+          }
+          if (!res.ok) {
+            throw new Error('Failed to delete conversation.');
+          }
+        } catch (err) {
+          alert(err.message);
+          return;
+        }
+      }
+
+      const updated = conversations.filter(c => c.id !== convId);
+      setConversations(updated);
+
+      if (activeConversationId === convId) {
+        if (updated.length > 0) {
+          setActiveConversationId(updated[0].id);
+        } else {
+          createNewConversation();
+        }
+      }
+    }
   };
 
-  // Save renamed conversation
-  const saveRename = (convId) => {
-    if (editingTitle.trim()) {
-      setConversations(prev => prev.map(c => {
-        if (c.id === convId) {
-          return { ...c, title: editingTitle.trim() };
-        }
-        return c;
-      }));
+  // Stop LLM streaming generation
+  const stopGenerating = () => {
+    if (activeReaderRef.current) {
+      activeReaderRef.current.cancel();
+      activeReaderRef.current = null;
     }
-    setEditingConvId(null);
+    setIsLlmGenerating(false);
   };
 
   // Handle Send Message (Actual SSE Streaming)
@@ -476,14 +561,21 @@ export default function App() {
         },
         body: JSON.stringify({ question })
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (!res.ok) {
         throw new Error('Query error. Is Ollama or the backend offline?');
       }
 
       const reader = res.body.getReader();
+      activeReaderRef.current = reader;
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
       let fullAnswer = "";
+
+      let currentConvId = activeConversationId;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -502,8 +594,10 @@ export default function App() {
               
               if (payload.conversation_id) {
                 const dbId = payload.conversation_id;
+                const oldId = currentConvId;
+                currentConvId = dbId;
                 setConversations(prev => prev.map(c => {
-                  if (c.id === activeConversationId) {
+                  if (c.id === oldId) {
                     return { ...c, id: dbId };
                   }
                   return c;
@@ -513,8 +607,7 @@ export default function App() {
 
               if (payload.sources) {
                 setConversations(prev => prev.map(c => {
-                  const targetId = payload.conversation_id || activeConversationId;
-                  if (c.id === targetId || c.id === activeConversationId) {
+                  if (c.id === currentConvId) {
                     const msgs = [...c.messages];
                     if (msgs.length > 0) {
                       msgs[msgs.length - 1] = {
@@ -533,8 +626,7 @@ export default function App() {
 
                 // Update assistant message with accumulated tokens
                 setConversations(prev => prev.map(c => {
-                  const targetId = payload.conversation_id || activeConversationId;
-                  if (c.id === targetId || c.id === activeConversationId) {
+                  if (c.id === currentConvId) {
                     const msgs = [...c.messages];
                     if (msgs.length > 0) {
                       msgs[msgs.length - 1] = {
@@ -566,6 +658,7 @@ export default function App() {
         return c;
       }));
     } finally {
+      activeReaderRef.current = null;
       setIsLlmGenerating(false);
     }
   };
@@ -575,7 +668,6 @@ export default function App() {
     fileInputRef.current?.click();
   };
 
-  // Handle File upload
   const handleFileChange = async (e) => {
     const files = Array.from(e.target.files);
     if (files.length === 0 || !authToken) return;
@@ -594,21 +686,16 @@ export default function App() {
           headers: { 'Authorization': `Bearer ${authToken}` },
           body: formData
         });
+        if (res.status === 401) {
+          handleLogout();
+          return;
+        }
         if (!res.ok) {
           throw new Error(`Failed to upload ${file.name}`);
         }
       }
 
       await fetchDocuments();
-
-      // Trigger standard confirmation banner
-      const notification = document.getElementById('upload-notice');
-      if (notification) {
-        notification.style.display = 'flex';
-        setTimeout(() => {
-          notification.style.display = 'none';
-        }, 3000);
-      }
     } catch (err) {
       alert(err.message);
     } finally {
@@ -617,7 +704,6 @@ export default function App() {
     }
   };
 
-  // Handle document deletion
   const handleDeleteDocument = async (docId) => {
     if (!authToken) return;
     try {
@@ -625,6 +711,10 @@ export default function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${authToken}` }
       });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
       if (res.ok) {
         setDocuments(prev => prev.filter(doc => doc.id !== docId));
       } else {
@@ -850,7 +940,7 @@ export default function App() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flexGrow: 1, maxHeight: 'calc(100% - 140px)' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flexGrow: 1 }}>
                     {filteredConversations.length === 0 ? (
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'center', padding: '12px' }}>
                         No active sessions found
@@ -860,63 +950,31 @@ export default function App() {
                         <div 
                           key={conv.id} 
                           className={`chat-item ${conv.id === activeConversationId ? 'active' : ''}`}
-                          onClick={() => {
-                            if (editingConvId !== conv.id) {
-                              setActiveConversationId(conv.id);
-                            }
-                          }}
+                          onClick={() => setActiveConversationId(conv.id)}
                           style={{ display: 'flex', justifyContent: 'space-between', paddingRight: '12px' }}
                         >
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexGrow: 1, overflow: 'hidden' }}>
                             <MessageSquare size={16} style={{ flexShrink: 0 }} />
-                            {editingConvId === conv.id ? (
-                              <input 
-                                type="text"
-                                className="chat-input"
-                                value={editingTitle}
-                                onChange={(e) => setEditingTitle(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    saveRename(conv.id);
-                                  }
-                                }}
-                                onBlur={() => saveRename(conv.id)}
-                                autoFocus
-                                style={{ 
-                                  background: 'rgba(255,255,255,0.8)', 
-                                  border: '1px solid var(--black-magic)',
-                                  borderRadius: '6px',
-                                  padding: '2px 6px',
-                                  fontSize: '0.85rem',
-                                  width: '100%'
-                                }}
-                              />
-                            ) : (
-                              <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{conv.title}</span>
-                            )}
+                            <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{conv.title}</span>
                           </div>
                           
-                          {editingConvId !== conv.id && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                startRename(conv.id, conv.title);
-                              }}
-                              style={{ 
-                                background: 'transparent', 
-                                border: 'none', 
-                                cursor: 'pointer', 
-                                color: 'var(--text-muted)',
-                                padding: '2px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                opacity: 0.6
-                              }}
-                              title="Rename chat"
-                            >
-                              <Edit2 size={13} style={{ flexShrink: 0 }} />
-                            </button>
-                          )}
+                          <button
+                            onClick={(e) => deleteConversation(e, conv.id)}
+                            style={{ 
+                              background: 'transparent', 
+                              border: 'none', 
+                              cursor: 'pointer', 
+                              color: 'var(--text-muted)',
+                              padding: '2px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              opacity: 0.6
+                            }}
+                            className="chat-delete-btn"
+                            title="Delete chat"
+                          >
+                            <Trash2 size={13} style={{ flexShrink: 0 }} />
+                          </button>
                         </div>
                       ))
                     )}
@@ -1029,6 +1087,53 @@ export default function App() {
               <FileCheck size={18} />
               <span>Documents successfully uploaded & indexed in Qdrant!</span>
             </div>
+
+            {/* Active Document Ingestion Progress Logs */}
+            {documents.filter(doc => doc.status !== 'READY').length > 0 && (
+              <div className="active-ingestion-jobs" style={{
+                margin: '0 auto 24px auto',
+                maxWidth: '720px',
+                width: '100%',
+                background: 'rgba(255, 255, 255, 0.45)',
+                borderRadius: '16px',
+                border: '1px solid var(--glass-border)',
+                padding: '12px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                boxShadow: '0 4px 30px rgba(0, 0, 0, 0.05)',
+                backdropFilter: 'blur(10px)'
+              }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--black-magic)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Loader2 size={14} className="animate-spin text-accent" />
+                  <span>Ingestion Progress & System Logs</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {documents.filter(doc => doc.status !== 'READY').map(job => (
+                    <div key={job.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', background: 'rgba(255,255,255,0.4)', padding: '6px 12px', borderRadius: '8px', border: '1px solid rgba(0,0,0,0.03)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '70%' }}>
+                        <FileText size={14} style={{ color: job.status === 'FAILED' ? 'red' : 'var(--accent-color)', flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.name}</span>
+                        {job.status === 'FAILED' ? (
+                          <span style={{ color: 'red', fontSize: '0.75rem', marginLeft: '6px' }}>(Failed: {job.errorMessage || 'Ingestion failed'})</span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: '6px' }}>({job.currentStep || 'Processing...'})</span>
+                        )}
+                      </div>
+                      
+                      {job.status !== 'FAILED' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '80px', height: '6px', background: 'rgba(0,0,0,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ width: `${job.progress}%`, height: '100%', background: 'var(--accent-color)', transition: 'width 0.3s ease' }}></div>
+                          </div>
+                          <span style={{ fontWeight: 700, minWidth: '35px', textAlign: 'right' }}>{job.progress}%</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Core Content Area */}
             {activeConversation.messages.length <= 1 ? (
@@ -1185,10 +1290,22 @@ export default function App() {
                   onChange={(e) => setInputVal(e.target.value)}
                 />
 
-                {/* Send Airplane Button */}
-                <button type="submit" className="input-send-btn" title="Send message">
-                  <Send size={18} />
-                </button>
+                {/* Send/Stop Pulse Button */}
+                {isLlmGenerating ? (
+                  <button 
+                    type="button" 
+                    className="input-send-btn pulse" 
+                    onClick={stopGenerating} 
+                    title="Stop generating" 
+                    style={{ background: 'var(--accent-color)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                  >
+                    <span className="stop-icon" style={{ display: 'block', width: '10px', height: '10px', background: 'white', borderRadius: '2px' }}></span>
+                  </button>
+                ) : (
+                  <button type="submit" className="input-send-btn" title="Send message" disabled={!inputVal.trim()}>
+                    <Send size={18} />
+                  </button>
+                )}
               </form>
             </div>
 

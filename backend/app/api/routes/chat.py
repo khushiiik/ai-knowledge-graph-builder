@@ -1,17 +1,23 @@
 import json
 import uuid
 from typing import List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import func
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 from app.dependencies import get_db, get_current_active_user, SessionLocal
 from app.models.user import User as UserModel
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
-from app.schemas.chat import AskRequest, ConversationOut, MessageOut
+from app.schemas.chat import AskRequest, AskResponse, ConversationOut, MessageOut
 from app.llm.providers.factory import get_llm_provider
+from app.pipeline.pipeline_runner import get_tenant_retriever
+from app.models.document import Document as DocumentModel
 from app.llm.prompts.chat_prompt import build_chat_messages
 from app.retrieval.semantic_search import retrieve_chunks, build_context_block
 from app.retrieval.graph_search import graph_search
@@ -38,6 +44,7 @@ def _get_or_create_conversation(
     db.commit()
     db.refresh(conversation)
     return conversation
+
 
 
 @router.post("/ask")
@@ -266,3 +273,23 @@ def get_conversation_messages(
     if not conversation:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
     return conversation.messages
+
+
+@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_200_OK)
+def delete_conversation(
+    conversation_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user),
+):
+    """Delete a conversation and all its messages."""
+    conversation = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id)
+        .first()
+    )
+    if not conversation:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    
+    db.delete(conversation)
+    db.commit()
+    return {"message": "Conversation deleted successfully"}
