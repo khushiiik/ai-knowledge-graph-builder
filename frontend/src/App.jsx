@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 
 export default function App() {
+  const vectraModel = "Vectra Mini";
+
   // Authentication State
   const [authToken, setAuthToken] = useState(() => {
     return localStorage.getItem('vectra_auth_token');
@@ -29,12 +31,12 @@ export default function App() {
   const [loginUser, setLoginUser] = useState(() => {
     const saved = localStorage.getItem('vectra_login_user');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try { return JSON.parse(saved); } catch (e) { }
     }
     return null;
   });
   const [authScreen, setAuthScreen] = useState('login'); // 'login' | 'register'
-  
+
   // Auth Form Fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -69,12 +71,12 @@ export default function App() {
   const [conversations, setConversations] = useState(() => {
     const saved = localStorage.getItem('vectra_conversations');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try { return JSON.parse(saved); } catch (e) { }
     }
     return [
       {
         id: "conv-1",
-        title: "Project Architecture Extraction",
+        title: "New chat",
         messages: [
           { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
         ]
@@ -88,7 +90,7 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (parsed.length > 0) return parsed[0].id;
-      } catch (e) {}
+      } catch (e) { }
     }
     return "conv-1";
   });
@@ -157,7 +159,7 @@ export default function App() {
           // Keep unsaved conversations (starting with conv-)
           const unsaved = prev.filter(c => c.id.startsWith("conv-"));
           const combined = [...unsaved];
-          
+
           // Add database conversations, avoiding duplicates
           mapped.forEach(mc => {
             if (!combined.some(c => c.id === mc.id)) {
@@ -199,7 +201,7 @@ export default function App() {
           text: m.content,
           sources: m.sources
         }));
-        
+
         if (mappedMsgs.length === 0) {
           mappedMsgs.push({
             sender: "assistant",
@@ -314,7 +316,7 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
 
-    const hasProcessing = documents.some(doc => 
+    const hasProcessing = documents.some(doc =>
       doc.status === 'QUEUED' || doc.status === 'PROCESSING' || doc.status === 'UPLOADING'
     );
 
@@ -376,8 +378,7 @@ export default function App() {
 
       setLoginUser({
         name: name,
-        email: email,
-        role: "Developer"
+        email: email
       });
       setAuthToken(data.access_token);
     } catch (err) {
@@ -424,8 +425,7 @@ export default function App() {
 
       setLoginUser({
         name: fullName,
-        email: email,
-        role: "Developer"
+        email: email
       });
       setAuthToken(data.access_token);
     } catch (err) {
@@ -443,7 +443,7 @@ export default function App() {
     setConversations([
       {
         id: "conv-1",
-        title: "Project Architecture Extraction",
+        title: "New chat",
         messages: [
           { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
         ]
@@ -456,12 +456,25 @@ export default function App() {
     localStorage.removeItem('vectra_active_conversation_id');
   };
 
-  // Create new conversation (creates conversation but does not expand the sidebar)
+  // Create new conversation
   const createNewConversation = () => {
+    // Check if the current conversation is empty
+    const activeConv = conversations.find(c => c.id === activeConversationId);
+    if (activeConv && activeConv.messages.length <= 1) {
+      return;
+    }
+
+    // Check if there is any other empty conversation to redirect to
+    const emptyConv = conversations.find(c => c.messages.length <= 1);
+    if (emptyConv) {
+      setActiveConversationId(emptyConv.id);
+      return;
+    }
+
     const newId = `conv-${Date.now()}`;
     const newConv = {
       id: newId,
-      title: `New Semantic Session ${conversations.length + 1}`,
+      title: "New chat",
       messages: [
         { sender: "assistant", text: "Hello! Started a new session. Upload files or ask me anything." }
       ]
@@ -524,7 +537,7 @@ export default function App() {
 
     const userMsg = { sender: "user", text: inputVal };
     const currentMessages = [...activeConversation.messages, userMsg];
-    
+
     // Add user message locally
     setConversations(prev => prev.map(c => {
       if (c.id === activeConversationId) {
@@ -591,7 +604,7 @@ export default function App() {
           if (trimmed.startsWith("data: ")) {
             try {
               const payload = JSON.parse(trimmed.slice(6));
-              
+
               if (payload.conversation_id) {
                 const dbId = payload.conversation_id;
                 const oldId = currentConvId;
@@ -676,8 +689,8 @@ export default function App() {
     setUploadProgress(`Ingesting ${files.length} file(s)...`);
 
     try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      // Perform concurrent background uploads
+      const uploadPromises = files.map(async (file) => {
         const formData = new FormData();
         formData.append('file', file);
 
@@ -688,13 +701,15 @@ export default function App() {
         });
         if (res.status === 401) {
           handleLogout();
-          return;
+          throw new Error("Unauthorized");
         }
         if (!res.ok) {
           throw new Error(`Failed to upload ${file.name}`);
         }
-      }
+        return res.json();
+      });
 
+      await Promise.all(uploadPromises);
       await fetchDocuments();
     } catch (err) {
       alert(err.message);
@@ -726,7 +741,7 @@ export default function App() {
   };
 
   // Filter conversations
-  const filteredConversations = conversations.filter(c => 
+  const filteredConversations = conversations.filter(c =>
     c.title.toLowerCase().includes(convSearchQuery.toLowerCase())
   );
 
@@ -780,10 +795,10 @@ export default function App() {
                     <label className="auth-label">Full Name</label>
                     <div style={{ position: 'relative' }}>
                       <User size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
-                      <input 
-                        type="text" 
-                        placeholder="Max Butler" 
-                        className="auth-input" 
+                      <input
+                        type="text"
+                        placeholder="Max Butler"
+                        className="auth-input"
                         style={{ paddingLeft: '38px', width: '100%' }}
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
@@ -796,10 +811,10 @@ export default function App() {
                   <label className="auth-label">Email Address</label>
                   <div style={{ position: 'relative' }}>
                     <Mail size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
-                    <input 
-                      type="email" 
-                      placeholder="max@example.com" 
-                      className="auth-input" 
+                    <input
+                      type="email"
+                      placeholder="max@example.com"
+                      className="auth-input"
                       style={{ paddingLeft: '38px', width: '100%' }}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -811,10 +826,10 @@ export default function App() {
                   <label className="auth-label">Password</label>
                   <div style={{ position: 'relative' }}>
                     <Lock size={16} style={{ position: 'absolute', left: '12px', top: '15px', color: 'var(--text-muted)' }} />
-                    <input 
-                      type="password" 
-                      placeholder="••••••••" 
-                      className="auth-input" 
+                    <input
+                      type="password"
+                      placeholder="••••••••"
+                      className="auth-input"
                       style={{ paddingLeft: '38px', width: '100%' }}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -830,14 +845,14 @@ export default function App() {
               <div className="auth-footer" style={{ marginTop: '8px' }}>
                 {authScreen === 'login' ? (
                   <>
-                    Don't have an account? 
+                    Don't have an account?
                     <button onClick={() => setAuthScreen('register')} className="auth-toggle-link">
                       Register
                     </button>
                   </>
                 ) : (
                   <>
-                    Already have an account? 
+                    Already have an account?
                     <button onClick={() => setAuthScreen('login')} className="auth-toggle-link">
                       Login
                     </button>
@@ -850,11 +865,11 @@ export default function App() {
         </div>
       ) : (
         <div className="app-container">
-          
+
           {/* SIDEBAR */}
           <aside className={`sidebar ${sidebarExpanded ? 'expanded' : ''}`}>
             <div className="sidebar-top">
-              
+
               {/* Logo */}
               <div className="sidebar-logo-container">
                 <div className="sidebar-logo">V</div>
@@ -865,8 +880,8 @@ export default function App() {
               {!sidebarExpanded ? (
                 <div className="sidebar-nav">
                   {/* New Chat Button (Creates a new session but does NOT expand the sidebar) */}
-                  <button 
-                    className="nav-item" 
+                  <button
+                    className="nav-item"
                     title="New Session"
                     onClick={createNewConversation}
                   >
@@ -874,7 +889,7 @@ export default function App() {
                   </button>
 
                   {/* Toggle Conversation List (Extra Button to Expand) */}
-                  <button 
+                  <button
                     className="nav-item"
                     title="Conversation List"
                     onClick={() => {
@@ -886,8 +901,8 @@ export default function App() {
                   </button>
 
                   {/* Search Toggle */}
-                  <button 
-                    className="nav-item" 
+                  <button
+                    className="nav-item"
                     title="Search Sessions"
                     onClick={() => {
                       setSearchOpen(true);
@@ -898,8 +913,8 @@ export default function App() {
                   </button>
 
                   {/* Manage Documents Database Icon */}
-                  <button 
-                    className="nav-item" 
+                  <button
+                    className="nav-item"
                     title="Uploaded Documents"
                     onClick={() => setShowDocsModal(true)}
                   >
@@ -911,24 +926,33 @@ export default function App() {
                 <div className="chat-list-container" style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <span style={{ fontWeight: 700, fontSize: '0.95rem', letterSpacing: '0.5px', textTransform: 'uppercase', opacity: 0.8 }}>Chats</span>
-                    <button 
-                      onClick={() => setSearchOpen(!searchOpen)} 
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--black-magic)' }}
-                      title="Filter chats"
-                    >
-                      <Search size={15} />
-                    </button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={createNewConversation}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--black-magic)' }}
+                        title="New Chat"
+                      >
+                        <Plus size={15} />
+                      </button>
+                      <button
+                        onClick={() => setSearchOpen(!searchOpen)}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--black-magic)' }}
+                        title="Filter chats"
+                      >
+                        <Search size={15} />
+                      </button>
+                    </div>
                   </div>
 
                   {searchOpen && (
                     <div style={{ marginBottom: '16px' }}>
-                      <input 
-                        type="text" 
+                      <input
+                        type="text"
                         placeholder="Search chats..."
                         className="chat-input"
-                        style={{ 
-                          background: 'rgba(255,255,255,0.4)', 
-                          padding: '8px 12px', 
+                        style={{
+                          background: 'rgba(255,255,255,0.4)',
+                          padding: '8px 12px',
                           borderRadius: '8px',
                           border: '1px solid var(--glass-border)',
                           width: '100%',
@@ -947,8 +971,8 @@ export default function App() {
                       </div>
                     ) : (
                       filteredConversations.map(conv => (
-                        <div 
-                          key={conv.id} 
+                        <div
+                          key={conv.id}
                           className={`chat-item ${conv.id === activeConversationId ? 'active' : ''}`}
                           onClick={() => setActiveConversationId(conv.id)}
                           style={{ display: 'flex', justifyContent: 'space-between', paddingRight: '12px' }}
@@ -957,13 +981,13 @@ export default function App() {
                             <MessageSquare size={16} style={{ flexShrink: 0 }} />
                             <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{conv.title}</span>
                           </div>
-                          
+
                           <button
                             onClick={(e) => deleteConversation(e, conv.id)}
-                            style={{ 
-                              background: 'transparent', 
-                              border: 'none', 
-                              cursor: 'pointer', 
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              cursor: 'pointer',
                               color: 'var(--text-muted)',
                               padding: '2px',
                               display: 'flex',
@@ -999,7 +1023,7 @@ export default function App() {
                         <span className="popover-header-email">{loginUser?.email}</span>
                       </div>
                     </div>
-                    
+
                     <div className="popover-item" onClick={() => { alert('Upgrade plan window coming soon!'); setShowProfileMenu(false); }}>
                       <Sparkles size={14} />
                       <span>Upgrade plan</span>
@@ -1020,9 +1044,9 @@ export default function App() {
                       <Sparkles size={14} style={{ opacity: 0 }} />
                       <span>Help</span>
                     </div>
-                    
+
                     <div className="popover-divider" />
-                    
+
                     <button className="popover-item popover-item-logout" onClick={() => { handleLogout(); setShowProfileMenu(false); }}>
                       <LogOut size={14} />
                       <span>Log out</span>
@@ -1033,8 +1057,8 @@ export default function App() {
 
               {/* Avatar trigger card (different based on collapsed/expanded sidebar) */}
               {!sidebarExpanded ? (
-                <div 
-                  className="profile-avatar-circle" 
+                <div
+                  className="profile-avatar-circle"
                   style={{ cursor: 'pointer', margin: '0 auto' }}
                   onClick={() => setShowProfileMenu(!showProfileMenu)}
                   title={loginUser?.name || "Profile Menu"}
@@ -1048,15 +1072,15 @@ export default function App() {
                   </div>
                   <div className="profile-card-details">
                     <span className="profile-card-name">{loginUser?.name}</span>
-                    <span className="profile-card-role">{loginUser?.role}</span>
+                    <span className="profile-card-model">{vectraModel}</span>
                   </div>
                 </div>
               )}
             </div>
 
             {/* Close Sidebar button */}
-            <button 
-              className="collapse-btn" 
+            <button
+              className="collapse-btn"
               onClick={() => setSidebarExpanded(false)}
             >
               <ChevronLeft size={16} />
@@ -1066,7 +1090,7 @@ export default function App() {
 
           {/* MAIN DASHBOARD AREA */}
           <main className="main-dashboard">
-            
+
             {/* Top Bar */}
             <div className="top-bar" style={{ marginBottom: '24px' }}>
               <div className="dropdown-selector">
@@ -1079,9 +1103,9 @@ export default function App() {
             </div>
 
             {/* Notification notice for upload success */}
-            <div 
-              id="upload-notice" 
-              className="upload-status" 
+            <div
+              id="upload-notice"
+              className="upload-status"
               style={{ display: 'none', position: 'absolute', top: '90px', right: '32px', width: 'auto', zIndex: 90 }}
             >
               <FileCheck size={18} />
@@ -1120,7 +1144,7 @@ export default function App() {
                           <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: '6px' }}>({job.currentStep || 'Processing...'})</span>
                         )}
                       </div>
-                      
+
                       {job.status !== 'FAILED' && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div style={{ width: '80px', height: '6px', background: 'rgba(0,0,0,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
@@ -1148,7 +1172,7 @@ export default function App() {
 
                 {/* Grid of Interactive Actions */}
                 <div className="card-grid" style={{ maxWidth: '720px', margin: '0 auto', width: '100%' }}>
-                  
+
                   {/* Upload Card */}
                   <div className="glass-card" onClick={triggerFileUpload} style={{ minHeight: '180px' }}>
                     <div>
@@ -1196,8 +1220,8 @@ export default function App() {
               /* Active Chat Window View */
               <div className="chat-window" style={{ paddingBottom: '20px' }}>
                 {activeConversation.messages.map((msg, i) => (
-                  <div 
-                    key={i} 
+                  <div
+                    key={i}
                     className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'}`}
                     style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
                   >
@@ -1211,17 +1235,17 @@ export default function App() {
                             const pageText = src.page !== null && src.page !== undefined ? ` (Page ${src.page + 1})` : '';
                             const typeText = src.type === 'graph' ? ' [Graph Fact]' : '';
                             return (
-                              <div 
-                                key={sIdx} 
+                              <div
+                                key={sIdx}
                                 className="citation-badge"
                                 title={src.text}
                                 onClick={() => alert(`Citation passage:\n"${src.text}"`)}
-                                style={{ 
-                                  fontSize: '0.72rem', 
-                                  background: 'rgba(255,255,255,0.6)', 
-                                  border: '1px solid var(--glass-border)', 
-                                  padding: '4px 8px', 
-                                  borderRadius: '6px', 
+                                style={{
+                                  fontSize: '0.72rem',
+                                  background: 'rgba(255,255,255,0.6)',
+                                  border: '1px solid var(--glass-border)',
+                                  padding: '4px 8px',
+                                  borderRadius: '6px',
                                   cursor: 'pointer',
                                   color: 'var(--black-magic)'
                                 }}
@@ -1261,30 +1285,30 @@ export default function App() {
               )}
               <form onSubmit={handleSendMessage} className="glass-input-bar">
                 {/* Plus upload button */}
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   className="input-plus-btn"
                   onClick={triggerFileUpload}
                   title="Upload multiple documents"
                 >
                   <Plus size={20} />
                 </button>
-                
+
                 {/* Hidden file input */}
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  style={{ display: 'none' }} 
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  style={{ display: 'none' }}
                   multiple
                   onChange={handleFileChange}
                   accept=".pdf,.docx,.txt,.csv,.xlsx,.json,.md"
                 />
 
                 {/* Chat Text Input */}
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   ref={chatInputRef}
-                  placeholder="Ask Vectra..." 
+                  placeholder="Ask Vectra..."
                   className="chat-input"
                   value={inputVal}
                   onChange={(e) => setInputVal(e.target.value)}
@@ -1292,11 +1316,11 @@ export default function App() {
 
                 {/* Send/Stop Pulse Button */}
                 {isLlmGenerating ? (
-                  <button 
-                    type="button" 
-                    className="input-send-btn pulse" 
-                    onClick={stopGenerating} 
-                    title="Stop generating" 
+                  <button
+                    type="button"
+                    className="input-send-btn pulse"
+                    onClick={stopGenerating}
+                    title="Stop generating"
                     style={{ background: 'var(--accent-color)', border: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                   >
                     <span className="stop-icon" style={{ display: 'block', width: '10px', height: '10px', background: 'white', borderRadius: '2px' }}></span>
@@ -1356,8 +1380,8 @@ export default function App() {
                             </div>
                           </div>
                         </div>
-                        <button 
-                          className="delete-doc-btn" 
+                        <button
+                          className="delete-doc-btn"
                           title="Delete Document"
                           onClick={() => handleDeleteDocument(doc.id)}
                           disabled={doc.status !== 'READY' && doc.status !== 'FAILED'}

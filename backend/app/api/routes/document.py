@@ -77,6 +77,8 @@ async def upload_document(
         ingest_document_task.delay(
             job_id_str=str(job.id),
             document_id_str=str(new_doc.id),
+            file_path=storage_path,
+            mime_type=mime_type,
             tenant_id=current_user.id
         )
     except Exception as e:
