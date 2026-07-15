@@ -572,7 +572,10 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question,
+        conversation_id: activeConversationId.startsWith("conv-")
+        ? null
+        : activeConversationId })
       });
       if (res.status === 401) {
         handleLogout();
@@ -589,6 +592,7 @@ export default function App() {
       let fullAnswer = "";
 
       let currentConvId = activeConversationId;
+      let currentEvent = "";
 
       while (true) {
         const { value, done } = await reader.read();
@@ -601,11 +605,13 @@ export default function App() {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed.startsWith("data: ")) {
+          if (trimmed.startsWith("event: ")) {
+            currentEvent = trimmed.slice(7);
+          } else if (trimmed.startsWith("data: ")) {
             try {
               const payload = JSON.parse(trimmed.slice(6));
 
-              if (payload.conversation_id) {
+              if (currentEvent === "conversation" || payload.conversation_id) {
                 const dbId = payload.conversation_id;
                 const oldId = currentConvId;
                 currentConvId = dbId;
@@ -618,7 +624,7 @@ export default function App() {
                 setActiveConversationId(dbId);
               }
 
-              if (payload.sources) {
+              if (currentEvent === "sources" || payload.sources) {
                 setConversations(prev => prev.map(c => {
                   if (c.id === currentConvId) {
                     const msgs = [...c.messages];

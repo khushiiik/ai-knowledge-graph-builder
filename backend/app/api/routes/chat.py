@@ -114,12 +114,11 @@ def ask_question(
         DocumentModel.deleted_at.is_(None)
     ).all()
 
-    # 4. Check if a document is mentioned in the query (updates conversation document focus)
+    # 4. Check if a document is explicitly mentioned in the query (updates conversation document focus)
     matched_doc = None
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
     for doc in sorted_docs:
         no_ext = os.path.splitext(doc.original_filename)[0]
-        # Strip copy suffixes like " (1)", " (2)" from filename before matching
         cleaned_no_ext = re.sub(r'\s*\(\d+\)\s*$', '', no_ext)
         
         if (doc.original_filename.lower() in payload.question.lower()) or \
@@ -132,16 +131,17 @@ def ask_question(
         conversation.document_id = matched_doc.id
         db.commit()
 
-    # Check if this query is about "the document" (ambiguous)
-    is_ambiguous_doc_query = bool(re.search(
-        r'\b(this|the|that|my|your|uploaded)?\s*(document|pdf|file|paper|sheet|text|data)\b', 
-        payload.question.lower()
-    ))
-
     # Auto-focus if only 1 document is uploaded and no focus is set
     if not conversation.document_id and len(docs) == 1:
         conversation.document_id = docs[0].id
         db.commit()
+
+    # Check if this query is about "the document" (ambiguous)
+    # Expanded to include csv, xlsx, excel, spreadsheet, docx, sheet
+    is_ambiguous_doc_query = bool(re.search(
+        r'\b(this|the|that|my|your|uploaded)?\s*(document|file|pdf|csv|xlsx|excel|spreadsheet|sheet|docx)\b', 
+        payload.question.lower()
+    ))
 
     # Stream clarification message if ambiguous query and multiple docs are uploaded with no focus
     if not conversation.document_id and len(docs) > 1 and is_ambiguous_doc_query:
