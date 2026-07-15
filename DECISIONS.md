@@ -83,72 +83,109 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 ## 6. Chunking Strategy
 
 * **Decision Title**: Chunking Strategy Selection
-* **Options Considered**: Fixed-size character splitter, Semantic splitter, RecursiveCharacterTextSplitter
-* **Chosen Option**: LangChain's `RecursiveCharacterTextSplitter` (chunk size 500, overlap 50).
+* **Options Considered**: Fixed-size character splitter, Semantic splitter, Paragraph-based splitter, RecursiveCharacterTextSplitter
+* **Chosen Option**: LangChain's `RecursiveCharacterTextSplitter` (chunk size 500, overlap 100).
 * **Rationale**: 
-  * Splits text recursively based on character lists (`\n\n`, `\n`, ` `), preserving paragraph structures and sentence structures much better than simple character counts.
-  * 500 characters is a balanced chunk size that fits within typical embedding context limits while preserving local context; 50 character overlap prevents boundary information loss.
+  * **Why Recursive/Fixed-size over Paragraph Chunking**: Paragraph chunking splits text solely by structural delimiters (like double newlines `\n\n`). While this preserves paragraph boundaries, it results in highly inconsistent chunk sizes. Some paragraphs are excessively long (exceeding token limits), while others are too short to hold sufficient context. `RecursiveCharacterTextSplitter` provides a hybrid, smart fixed-size approach that splits recursively on a list of characters (`\n\n`, `\n`, ` `, `""`), ensuring chunks remain close to the target size (500 characters) while retaining structural layout and avoiding database storage bloating.
+  * **Why Recursive/Fixed-size over Semantic Chunking**: Semantic splitters determine chunk boundaries by calculating sentence-level embeddings and finding points where similarity falls below a threshold. This is computationally expensive, requires calling an embedding model repeatedly for every single sentence boundary during ingestion, increases API/compute latency, and is highly sensitive to similarity threshold settings. Recursive splitting is extremely fast, fully local, and runs in linear time.
+  * **Overlap Size Selection (100 characters)**: We chose an overlap of 100 characters (approximately 15-20 words, or a full medium-length sentence). This size is sufficient to preserve context (like pronouns, subjects, or transition words) across boundaries, preventing context fragmentation when parsing dense text documents. It strikes a balance between keeping adjacent context linked and avoiding excessive index inflation or repetitive retrieval results.
 * **Trade-offs**: 
-  * Simple heuristic-based splitting compared to complex embedding-based semantic splitting.
-  * **At Scale (10,000+ users)**: Yes. Recursive character splitting scales linearly in CPU time and keeps processing speeds fast.
+  * Relies on heuristic-based splitting rather than true semantic coherence detection.
+  * **At Scale (10,000+ users)**: Yes. Simple recursive splitting scales linearly in CPU time and keeps ingestion throughput high.
 
 ---
 
 ## 7. Embedding Model
 
 * **Decision Title**: Embedding Model Selection
-* **Options Considered**: API-based models (e.g. OpenAI `text-embedding-3-small`), Self-hosted models (e.g. HuggingFace sentence-transformers), Online Gemini Embeddings
-* **Chosen Option**: Online Gemini Embeddings (`gemini-embedding-001`) with 3072 dimensions.
+* **Options Considered**: API-based models (e.g. OpenAI `text-embedding-3-small` / `text-embedding-3-large`), Self-hosted models (e.g. HuggingFace sentence-transformers like `all-MiniLM-L6-v2` or `bge-large-en-v1.5`), Online Gemini Embeddings
+* **Chosen Option**: Online Gemini Embeddings (`models/gemini-embedding-001`) with 3072 dimensions.
 * **Rationale**:
-  * **Serverless Execution**: Does not require loading heavy weights locally, saving disk space (no heavy docker images) and CPU/RAM resources.
-  * **High Dimension Capacity**: 3072 dimensions provide excellent semantic representation and finer retrieval quality.
-  * **High Throughput**: Runs on Google's global serverless infrastructure, meaning instant startup and execution.
+  * **Cost**: Gemini Embeddings offer a highly generous free tier and low pay-as-you-go pricing compared to OpenAI's equivalent API models, significantly reducing operational costs during development and production.
+  * **Latency**: Provides extremely low response times (sub-100ms) by utilizing Google's globally optimized, serverless infrastructure.
+  * **Quality**: High-quality semantic representations across multiple domains with 3072-dimensional output, providing high vector resolution and precise similarity searches.
+  * **Self-hosted vs API**: 
+    * *Self-hosted models* (like HuggingFace transformers) require loading massive neural network weights into RAM/VRAM, making our Docker containers heavy (multiple gigabytes of image size) and increasing server cost.
+    * *API-based models* (like Gemini) keep the application container extremely lightweight, require zero local GPU hardware, and scale dynamically without compute bottlenecks.
 * **Trade-offs**:
-  * Requires internet connectivity and an API key.
-  * **At Scale (10,000+ users)**: Yes. Utilizing an online API model scales seamlessly without hosting overhead.
+  * Requires constant internet connectivity and relies on external API availability and key management.
+  * **At Scale (10,000+ users)**: Yes. Utilizing an online API model scales seamlessly without hosting and hardware scaling overhead.
 
 ---
 
 ## 8. NER / Relationship Extraction
 
 * **Decision Title**: NER & Relation Extraction Strategy
-* **Options Considered**: spaCy, Fine-tuned LLM, Prompt-based LLM Extraction
-* **Chosen Option**: Prompt-based LLM Extraction (structured JSON output).
+* **Options Considered**: Rule-based / Statistical (spaCy), Fine-tuned Model (e.g. REBEL, SpanMarker), Prompt-based LLM Extraction
+* **Chosen Option**: Prompt-based LLM Extraction (structured JSON output via Ollama / Groq).
 * **Rationale**:
-  * **Flexibility**: Prompting enables the extraction of open-domain relationship types and attributes without training custom models.
-  * **Contextual Comprehension**: Advanced LLMs are highly capable of understanding semantic nuances and identifying entity mappings correctly from unstructured paragraphs.
+  * **Rule-based (spaCy)**:
+    * *Pros*: Extremely high throughput, sub-millisecond execution, runs completely offline, zero token cost.
+    - *Cons*: Extremely rigid. spaCy models are trained on specific pre-defined entity sets (e.g., PERSON, ORG, LOC) and cannot easily adapt to arbitrary open-domain entities. Furthermore, extracting relationships requires building custom dependency parsers or training a second model, which yields poor accuracy for complex, unstructured texts.
+  * **Fine-tuned models**:
+    * *Pros*: Faster than LLMs and reasonably accurate for standard relations.
+    * *Cons*: Lacks schema flexibility. Requires hosting a separate dedicated model, and does not generalize well to general user-uploaded documents with diverse domain vocabulary.
+  * **LLM-based extraction**:
+    * *Pros*: Maximum flexibility. LLM prompting allows zero-shot extraction of arbitrary entities and open-domain relationships in a single pass. It easily grasps complex semantic contexts and outputs well-structured JSON formats.
+    * *Cons*: Higher processing latency and token cost, plus the risk of invalid JSON generation from smaller models.
+  * **Justification**: Since the application is an open-domain Knowledge Graph builder, the flexibility to parse any document type (e.g., medical, financial, legal) without custom model training makes LLM-based extraction the most robust choice.
 * **Trade-offs**:
-  * LLM extraction is slower and more token-heavy than standard spaCy rule/statistical extraction.
-  * **At Scale (10,000+ users)**: In a high-scale deployment, we would run extraction asynchronously using a dedicated worker pool of lightweight LLMs to prevent bottlenecking the ingestion queue.
+  * Slower and more resource-intensive than standard spaCy rule/statistical extraction.
+  * **At Scale (10,000+ users)**: Yes. In a high-scale deployment, extraction jobs are offloaded to asynchronous Celery workers running a lightweight LLM pool, keeping the API response times low.
 
 ---
 
 ## 9. LLM for Generation
 
 * **Decision Title**: LLM Selection for Generation
-* **Options Considered**: Cloud API (e.g. OpenAI GPT-4o, Anthropic Claude), Local deployment (e.g. Ollama, Llama 3, Qwen 2.5)
-* **Chosen Option**: Local deployment via **Ollama** running the **Qwen 2.5 (3B)** model, fallback to Groq/Gemini APIs.
+* **Options Considered**: Cloud APIs (e.g. OpenAI GPT-4o, Anthropic Claude), Local deployment (e.g. Ollama with Llama 3 (8B) or Mixtral (8x7B)), Local Qwen 2.5 (3B)
+* **Chosen Option**: Online API deployment via **Groq** running the **Llama 3.3 (70B) model** (`llama-3.3-70b-versatile`), with a fallback/offline developer configuration to local **Ollama** running the **Qwen 2.5 (3B)** model.
 * **Rationale**:
-  * **Data Privacy & Isolation**: Keeps all user prompts and knowledge graph data local, ensuring compliance with our strict tenant isolation strategies.
-  * **No API Costs**: Eliminates pay-per-token API fees, allowing infinite loops of development, testing, and retrieval generation.
-  * **Highly Lightweight**: The 3B parameter model has a low memory footprint (approx. 2.0 GB VRAM/RAM), making it viable to run concurrently with Qdrant, Neo4j, and Postgres on standard development hardware.
+  * **GPT-4o (Cloud API)**:
+    * *Cost*: High (pay-per-token model, expensive for long conversations or large retrieval inputs).
+    * *Context Window*: 128k tokens.
+    * *Quality*: State-of-the-art reasoning and synthesis.
+    * *Privacy*: Fails our strict tenant isolation guidelines as user-uploaded document contents are sent to external OpenAI servers.
+    * *Latency*: Network dependent (typically 1.5 - 3 seconds).
+  * **Llama 3.3 (70B) via Groq**:
+    * *Cost*: Extremely low pay-per-token API cost compared to GPT-4o or Claude, making it highly feasible for high-frequency extraction and chat cycles.
+    * *Context Window*: 128k tokens, allowing large contextual inputs from fused vector and graph databases.
+    * *Quality*: Outstanding reasoning and logical capabilities, comparable to GPT-4o, especially when adhering to strict JSON structures for relation extraction.
+    * *Privacy*: External API calls via TLS to Groq API.
+    * *Latency*: Sub-second response times thanks to Groq's high-speed inference engine (LPU architecture).
+  * **Qwen 2.5 (3B) (Self-hosted via Ollama)**:
+    * *Cost*: Zero (fully local execution).
+    * *Context Window*: 32k tokens.
+    * *Quality*: Decent synthesis, but has reduced reasoning/JSON-syntax correctness compared to a 70B model.
+    * *Privacy*: 100% private; all prompts and data remain on the local machine (perfect for local development and offline environments).
+    * *Latency*: Very fast local CPU/GPU inference with a small memory footprint (~2GB RAM).
+  * **Justification**: Groq's Llama 3.3 (70B) serves as the primary high-quality deployment LLM, delivering state-of-the-art reasoning speeds at low API costs, while Ollama with Qwen 2.5 (3B) is supported as a fully offline/private developer alternative.
 * **Trade-offs**:
-  * **Cognitive Capacity**: A 3B model has reduced reasoning power, syntax correctness, and long-context performance compared to a 7B, 14B, or GPT-4o level model.
-  * **At Scale (10,000+ users)**: For 10,000+ users, we would deploy a scalable inference server like vLLM on dedicated GPU cloud nodes, or switch to a private deployment of a larger model (e.g., Qwen 72B). For our current local deployment, Docker-managed Ollama is the best choice.
+  * Relying on Groq API requires managing API keys and network connectivity.
+  * **At Scale (10,000+ users)**: For production setups, Groq API scales automatically to handle concurrent requests without hardware provisioning, while local Ollama remains a development/private deployment feature.
 
 ---
 
 ## 10. Result Fusion Strategy
 
 * **Decision Title**: Result Fusion (Graph + Vector) Strategy
-* **Options Considered**: Reciprocal Rank Fusion (RRF), Weighted Merge, Re-ranker
+* **Options Considered**: Reciprocal Rank Fusion (RRF), Simple Concatenation, LLM-based Re-ranker (e.g. Cross-Encoders)
 * **Chosen Option**: Reciprocal Rank Fusion (RRF) with constant `k=60`.
 * **Rationale**:
-  * **Distribution Independent**: Evaluates ranks from disparate sources (dense semantic vector retrieval vs structured cypher graph matches) without requiring scores to be in the same scale.
-  * **Parameter Free**: RRF does not require complex parameter tuning, ensuring solid baseline fusion performance.
+  * **Simple Concatenation**:
+    * *Pros*: Trivial to implement.
+    * *Cons*: Merely merges results from vector search and graph search in arbitrary order. It does not evaluate context relevance, potentially diluting context quality and pushing crucial information out of the LLM's attention window.
+  * **LLM-based Re-ranker**:
+    * *Pros*: Highest precision in identifying the most relevant chunks.
+    * *Cons*: Adds a significant latency penalty (an extra LLM call to score each retrieval candidate) and increases API token costs.
+  * **Reciprocal Rank Fusion (RRF)**:
+    * *Pros*:
+      * *Distribution Independent*: Graph match counts (discrete numbers) and vector similarities (cosine similarities) are on completely different scales. Standard normalization methods fail to combine them. RRF evaluates only the relative ranks of document candidates, bypassing normalization issues.
+      - *Parameter Free*: Standardizes on the constant $k=60$, delivering robust performance without needing validation set tuning.
+      - *High Performance*: Runs in constant $O(N \log N)$ sorting complexity, introducing negligible latency overhead.
 * **Trade-offs**:
-  * Does not evaluate exact score weight relative strengths.
-  * **At Scale (10,000+ users)**: Yes. RRF scales with low computational cost and runs in constant O(N log N) rank sorting time.
+  * Evaluates rankings rather than absolute relevance scores.
+  * **At Scale (10,000+ users)**: Yes. RRF is computationally efficient and scales to large query loads effortlessly.
 
 ---
 
