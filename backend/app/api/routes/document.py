@@ -194,7 +194,7 @@ def delete_document(
                     must=[
                         qdrant_models.FieldCondition(
                             key="metadata.source_file",
-                            match=qdrant_models.MatchValue(value=doc.original_filename)
+                            match=qdrant_models.MatchValue(value=doc.stored_filename)
                         ),
                         qdrant_models.FieldCondition(
                             key="metadata.tenant_id",
@@ -209,7 +209,7 @@ def delete_document(
 
     # 4. Delete from Neo4j Graph database
     try:
-        delete_document_facts(user_id=current_user.id, source_file=doc.original_filename)
+        delete_document_facts(user_id=current_user.id, source_file=doc.stored_filename)
     except Exception as ne:
         print(f"Error deleting Neo4j facts: {ne}")
 

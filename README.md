@@ -74,6 +74,15 @@ A successful query to `/health` should return:
 
 ---
 
+## Migration Notes
+
+> [!WARNING]
+> **Embedding Model Switch Migration**:
+> If you switch embedding models (e.g. from the default local FastEmbed model to Gemini Embeddings or vice versa), the vector dimension sizes will mismatch (e.g., 384 vs 3072). The pipeline automatically drops and recreates the Qdrant vector collection on startup to prevent vector search errors, which means all previously-ingested documents will lose their vectors.
+> **You must re-upload and re-ingest your documents after switching embedding models to index them correctly.**
+
+---
+
 ## Local Development (Without Docker Compose)
 
 If you prefer to run only the databases via Docker, and execute the backend code directly on your local system:
