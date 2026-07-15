@@ -77,9 +77,6 @@ export default function App() {
       {
         id: "conv-1",
         title: "New chat",
-        messages: [
-          { sender: "assistant", text: "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions or upload files to ingest into the graph database." }
-        ]
       }
     ];
   });
@@ -572,10 +569,12 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
-        body: JSON.stringify({ question,
-        conversation_id: activeConversationId.startsWith("conv-")
-        ? null
-        : activeConversationId })
+        body: JSON.stringify({
+          question,
+          conversation_id: activeConversationId.startsWith("conv-")
+            ? null
+            : activeConversationId
+        })
       });
       if (res.status === 401) {
         handleLogout();

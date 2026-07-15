@@ -29,6 +29,37 @@ from app.retrieval.fusion import reciprocal_rank_fusion
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
+def normalize_text(text: str) -> str:
+    """Normalize filenames and questions for matching."""
+    text = text.lower()
+    text = re.sub(r"\.[a-z0-9]+$", "", text)
+    text = re.sub(r"[_\-\.\,\!\?\(\)\[\]\{\}]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def classify_intent(question: str) -> str:
+    """Classify the user's question intent using rule-based heuristics."""
+    q = question.lower().strip().strip("?.!")
+    
+    greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "greetings", "yo"}
+    if q in greetings:
+        return "greeting"
+        
+    list_keywords = ["list", "show", "what are", "which are", "display"]
+    doc_keywords = ["documents", "files", "pdfs", "csvs", "uploads", "uploaded files", "uploaded documents"]
+    if any(lk in q for lk in list_keywords) and any(dk in q for dk in doc_keywords):
+        return "document_list"
+    if "how many" in q and any(dk in q for dk in doc_keywords):
+        return "document_count"
+        
+    focus_keywords = ["active", "focus", "focused", "selected", "current"]
+    if any(fk in q for fk in focus_keywords) and any(dk in q for dk in doc_keywords + ["file", "document"]):
+        return "document_focus"
+
+    return "knowledge_query"
+
+
 def _get_or_create_conversation(
     db: Session, user: UserModel, conversation_id: Optional[uuid.UUID]
 ) -> Conversation:
@@ -114,16 +145,63 @@ def ask_question(
         DocumentModel.deleted_at.is_(None)
     ).all()
 
+    # Classify intent and route if not a knowledge query
+    intent = classify_intent(payload.question)
+    if intent != "knowledge_query":
+        def simple_stream():
+            yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+            
+            if intent == "greeting":
+                reply = "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions about your uploaded documents or upload files to ingest into the database."
+            elif intent == "document_list":
+                if not docs:
+                    reply = "You don't have any uploaded documents yet."
+                else:
+                    file_list = "\n".join(f"- {d.original_filename}" for d in docs)
+                    reply = f"You have the following documents uploaded:\n{file_list}"
+            elif intent == "document_count":
+                reply = f"You currently have {len(docs)} document(s) uploaded."
+            elif intent == "document_focus":
+                focused_name = None
+                if conversation.document_id:
+                    f_doc = next((d for d in docs if d.id == conversation.document_id), None)
+                    if f_doc:
+                        focused_name = f_doc.original_filename
+                if focused_name:
+                    reply = f"The currently focused document is: **{focused_name}**"
+                else:
+                    reply = "No document is currently focused. Ask a question about a specific document or select one."
+            else:
+                reply = "I'm ready to help. What would you like to know?"
+                
+            yield f"data: {json.dumps({'token': reply})}\n\n"
+            
+            session = SessionLocal()
+            try:
+                session.add(
+                    Message(
+                        conversation_id=conversation_id,
+                        role=MessageRole.ASSISTANT.value,
+                        content=reply,
+                        sources=None
+                    )
+                )
+                session.commit()
+            finally:
+                session.close()
+                
+            yield "event: done\ndata: {}\n\n"
+            
+        return StreamingResponse(simple_stream(), media_type="text/event-stream")
+
     # 4. Check if a document is explicitly mentioned in the query (updates conversation document focus)
     matched_doc = None
+    normalized_question = normalize_text(payload.question)
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
     for doc in sorted_docs:
-        no_ext = os.path.splitext(doc.original_filename)[0]
-        cleaned_no_ext = re.sub(r'\s*\(\d+\)\s*$', '', no_ext)
-        
-        if (doc.original_filename.lower() in payload.question.lower()) or \
-           (len(no_ext) > 3 and no_ext.lower() in payload.question.lower()) or \
-           (len(cleaned_no_ext) > 3 and cleaned_no_ext.lower() in payload.question.lower()):
+        norm_name = normalize_text(doc.original_filename)
+        if (norm_name in normalized_question) or \
+           (len(norm_name) > 3 and all(w in normalized_question.split() for w in norm_name.split())):
             matched_doc = doc
             break
 
