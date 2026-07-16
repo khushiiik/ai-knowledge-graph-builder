@@ -92,7 +92,11 @@ export default function App() {
     return "conv-1";
   });
 
-  const activeConversation = conversations.find(c => c.id === activeConversationId) || conversations[0] || { id: "conv-1", messages: [] };
+  const activeConversationRaw = conversations.find(c => c.id === activeConversationId) || conversations[0] || { id: "conv-1", messages: [] };
+  const activeConversation = {
+    ...activeConversationRaw,
+    messages: activeConversationRaw.messages || []
+  };
 
   // Documents list fetched dynamically from backend
   const [documents, setDocuments] = useState([]);
@@ -193,11 +197,16 @@ export default function App() {
       }
       if (res.ok) {
         const data = await res.json();
-        const mappedMsgs = data.map(m => ({
-          sender: m.role, // 'user' -> 'user', 'assistant' -> 'assistant'
-          text: m.content,
-          sources: m.sources
-        }));
+        const mappedMsgs = data.map(m => {
+          const chartSource = m.sources ? m.sources.find(s => s.type === 'chart') : null;
+          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart') : null;
+          return {
+            sender: m.role,
+            text: m.content,
+            sources: citations && citations.length > 0 ? citations : null,
+            chartFigure: chartSource ? chartSource.figure : null
+          };
+        });
 
         if (mappedMsgs.length === 0) {
           mappedMsgs.push({
@@ -571,7 +580,7 @@ export default function App() {
         },
         body: JSON.stringify({
           question,
-          conversation_id: activeConversationId.startsWith("conv-")
+          conversation_id: (activeConversationId && activeConversationId.startsWith("conv-"))
             ? null
             : activeConversationId
         })
@@ -610,7 +619,7 @@ export default function App() {
             try {
               const payload = JSON.parse(trimmed.slice(6));
 
-              if (currentEvent === "conversation" || payload.conversation_id) {
+              if (payload.conversation_id !== undefined) {
                 const dbId = payload.conversation_id;
                 const oldId = currentConvId;
                 currentConvId = dbId;
@@ -623,7 +632,7 @@ export default function App() {
                 setActiveConversationId(dbId);
               }
 
-              if (currentEvent === "sources" || payload.sources) {
+              if (payload.sources !== undefined) {
                 setConversations(prev => prev.map(c => {
                   if (c.id === currentConvId) {
                     const msgs = [...c.messages];
@@ -631,6 +640,22 @@ export default function App() {
                       msgs[msgs.length - 1] = {
                         ...msgs[msgs.length - 1],
                         sources: payload.sources
+                      };
+                    }
+                    return { ...c, messages: msgs };
+                  }
+                  return c;
+                }));
+              }
+
+              if (payload.figure !== undefined) {
+                setConversations(prev => prev.map(c => {
+                  if (c.id === currentConvId) {
+                    const msgs = [...c.messages];
+                    if (msgs.length > 0) {
+                      msgs[msgs.length - 1] = {
+                        ...msgs[msgs.length - 1],
+                        chartFigure: payload.figure
                       };
                     }
                     return { ...c, messages: msgs };
@@ -1231,6 +1256,11 @@ export default function App() {
                     style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
                   >
                     <div style={{ whiteSpace: 'pre-line' }}>{msg.text}</div>
+                    {msg.chartFigure && (
+                      <div className="chart-container" style={{ marginTop: '12px', width: '100%' }}>
+                        <PlotlyChart figure={msg.chartFigure} />
+                      </div>
+                    )}
                     {msg.sender === 'assistant' && msg.sources && msg.sources.length > 0 && (
                       <div className="citations-container" style={{ marginTop: '8px', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: '8px', width: '100%' }}>
                         <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Sources:</div>
@@ -1405,5 +1435,72 @@ export default function App() {
         </div>
       )}
     </>
+  );
+}
+
+function PlotlyChart({ figure }) {
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (containerRef.current && window.Plotly && figure) {
+      try {
+        const parsedFigure = typeof figure === 'string' ? JSON.parse(figure) : figure;
+        const layout = {
+          ...parsedFigure.layout,
+          autosize: true,
+          margin: { l: 45, r: 25, t: 40, b: 45 },
+          paper_bgcolor: '#ffffff',
+          plot_bgcolor: '#ffffff',
+          font: { family: 'Outfit, sans-serif', size: 12 }
+        };
+        
+        window.Plotly.newPlot(
+          containerRef.current,
+          parsedFigure.data,
+          layout,
+          { responsive: true, displayModeBar: true, displaylogo: false }
+        );
+      } catch (err) {
+        console.error("Error rendering Plotly chart:", err);
+      }
+    }
+  }, [figure]);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', background: '#ffffff', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.1)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.04)' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '380px' }} />
+      <button
+        onClick={() => {
+          if (window.Plotly && containerRef.current) {
+            window.Plotly.downloadImage(containerRef.current, {
+              format: 'png',
+              filename: 'plotly_chart',
+              height: 600,
+              width: 800
+            });
+          }
+        }}
+        style={{
+          position: 'absolute',
+          bottom: '12px',
+          right: '12px',
+          zIndex: 10,
+          background: 'var(--accent-color, #4f46e5)',
+          color: '#ffffff',
+          border: 'none',
+          padding: '6px 12px',
+          borderRadius: '6px',
+          cursor: 'pointer',
+          fontSize: '0.72rem',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          boxShadow: '0 2px 6px rgba(79, 70, 229, 0.2)'
+        }}
+      >
+        <span>📷 Download PNG</span>
+      </button>
+    </div>
   );
 }

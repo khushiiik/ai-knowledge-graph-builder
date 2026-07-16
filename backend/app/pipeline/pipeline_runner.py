@@ -11,7 +11,21 @@ from app.db.neo4j_client import write_graph_data
 
 # Patch QdrantClient to support the legacy search method used by langchain_community
 if not hasattr(qdrant_client.QdrantClient, "search"):
-    def legacy_search(self, collection_name, query_vector, query_filter=None, search_params=None, limit=10, offset=0, with_payload=True, with_vectors=False, score_threshold=None, consistency=None, **kwargs):
+
+    def legacy_search(
+        self,
+        collection_name,
+        query_vector,
+        query_filter=None,
+        search_params=None,
+        limit=10,
+        offset=0,
+        with_payload=True,
+        with_vectors=False,
+        score_threshold=None,
+        consistency=None,
+        **kwargs,
+    ):
         return self.query_points(
             collection_name=collection_name,
             query=query_vector,
@@ -23,8 +37,9 @@ if not hasattr(qdrant_client.QdrantClient, "search"):
             with_vectors=with_vectors,
             score_threshold=score_threshold,
             consistency=consistency,
-            **kwargs
+            **kwargs,
         ).points
+
     qdrant_client.QdrantClient.search = legacy_search
 
 from langchain_community.vectorstores import Qdrant
@@ -43,7 +58,14 @@ from app.models.chunk import Chunk
 
 COLLECTION_NAME = "shared_knowledge_graph"
 
-def _update_job_progress(db: Session, job_id: Optional[UUID], progress: int, current_step: str, status: Optional[str] = None):
+
+def _update_job_progress(
+    db: Session,
+    job_id: Optional[UUID],
+    progress: int,
+    current_step: str,
+    status: Optional[str] = None,
+):
     if not job_id:
         return
     job = db.query(ProcessingJob).filter(ProcessingJob.id == job_id).first()
@@ -54,7 +76,10 @@ def _update_job_progress(db: Session, job_id: Optional[UUID], progress: int, cur
             job.status = status
         db.commit()
 
-def ensure_collection_exists(client: QdrantClient, collection_name: str, vector_size: int = 3072) -> None:
+
+def ensure_collection_exists(
+    client: QdrantClient, collection_name: str, vector_size: int = 3072
+) -> None:
     """
     Checks if a collection exists in Qdrant. If not, or if its dimension size
     does not match the target vector_size, recreates it manually.
@@ -68,21 +93,27 @@ def ensure_collection_exists(client: QdrantClient, collection_name: str, vector_
             client.create_collection(
                 collection_name=collection_name,
                 vectors_config=qdrant_models.VectorParams(
-                    size=vector_size,
-                    distance=qdrant_models.Distance.COSINE
-                )
+                    size=vector_size, distance=qdrant_models.Distance.COSINE
+                ),
             )
     except Exception:
         # Collection does not exist, create it manually
         client.create_collection(
             collection_name=collection_name,
             vectors_config=qdrant_models.VectorParams(
-                size=vector_size,
-                distance=qdrant_models.Distance.COSINE
-            )
+                size=vector_size, distance=qdrant_models.Distance.COSINE
+            ),
         )
 
-def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mime_type: str, tenant_id: int, job_id: Optional[UUID] = None) -> None:
+
+def ingest_document_to_qdrant(
+    db: Session,
+    document_id: UUID,
+    file_path: str,
+    mime_type: str,
+    tenant_id: int,
+    job_id: Optional[UUID] = None,
+) -> None:
     """
     Ingestion pipeline:
     1. Extracts documents/text from a file.
@@ -93,7 +124,9 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     6. Connects to Qdrant and stores the vector embeddings using the matching IDs.
     """
     # 1. Extract text content
-    _update_job_progress(db, job_id, 10, "Extracting text content from file", "PROCESSING")
+    _update_job_progress(
+        db, job_id, 10, "Extracting text content from file", "PROCESSING"
+    )
     docs = extract_documents_from_file(file_path, mime_type)
     if not docs:
         return
@@ -101,7 +134,9 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     # Sanitize document text to prevent ValueError: A string literal cannot contain NUL (0x00) characters.
     for doc in docs:
         if doc.page_content:
-            doc.page_content = doc.page_content.replace('\x00', '').replace('\u0000', '')
+            doc.page_content = doc.page_content.replace("\x00", "").replace(
+                "\u0000", ""
+            )
 
     # 2. Update Document record with raw extracted text in Postgres
     _update_job_progress(db, job_id, 30, "Saving raw text to database")
@@ -121,7 +156,7 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     qdrant_ids = []
     for idx, chunk in enumerate(chunks):
         chunk_id = uuid.uuid4()
-        
+
         # Attach tenant_id and metadata for security/filtering
         chunk.metadata["tenant_id"] = tenant_id
         chunk.metadata["source_file"] = os.path.basename(file_path)
@@ -137,7 +172,7 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
             text=chunk.page_content,
             source_filename=os.path.basename(file_path),
             page_section=page_section,
-            qdrant_point_id=str(chunk_id)
+            qdrant_point_id=str(chunk_id),
         )
         postgres_chunks.append(postgres_chunk)
         qdrant_ids.append(str(chunk_id))
@@ -152,23 +187,20 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
     # Store in Qdrant Vector Store
     qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
     client = QdrantClient(url=qdrant_url)
-    
+
     # Ensure collection exists to bypass the LangChain recreate compatibility bug
     ensure_collection_exists(client, COLLECTION_NAME, vector_size=3072)
-    
+
     vector_store = Qdrant(
-        client=client,
-        collection_name=COLLECTION_NAME,
-        embeddings=embeddings
-    )
-    
-    vector_store.add_documents(
-        documents=chunks,
-        ids=qdrant_ids
+        client=client, collection_name=COLLECTION_NAME, embeddings=embeddings
     )
 
+    vector_store.add_documents(documents=chunks, ids=qdrant_ids)
+
     # 6. Extract entities & relationships per chunk and write them into Neo4j
-    _update_job_progress(db, job_id, 97, "Extracting entities and relationships into Neo4j")
+    _update_job_progress(
+        db, job_id, 97, "Extracting entities and relationships into Neo4j"
+    )
 
     for chunk in chunks:
         try:
@@ -183,7 +215,10 @@ def ingest_document_to_qdrant(db: Session, document_id: UUID, file_path: str, mi
             # Graph extraction is best-effort -- one bad chunk shouldn't fail the whole pipeline
             continue
 
-def get_tenant_retriever(tenant_id: int, limit: int = 3, source_file: Optional[str] = None) -> VectorStoreRetriever:
+
+def get_tenant_retriever(
+    tenant_id: int, limit: int = 3, source_file: Optional[str] = None
+) -> VectorStoreRetriever:
     """
     Returns a Qdrant-backed VectorStoreRetriever pre-filtered for a specific tenant_id.
     Ensures that users can only query their own files.
@@ -192,36 +227,29 @@ def get_tenant_retriever(tenant_id: int, limit: int = 3, source_file: Optional[s
     qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
 
     client = QdrantClient(url=qdrant_url)
-    
+
     # Ensure collection exists for retrieval too
     ensure_collection_exists(client, COLLECTION_NAME, vector_size=3072)
 
     vector_store = Qdrant(
-        client=client,
-        collection_name=COLLECTION_NAME,
-        embeddings=embeddings
+        client=client, collection_name=COLLECTION_NAME, embeddings=embeddings
     )
 
     # Define Qdrant payload filter to enforce multi-tenancy boundaries
     must_conditions = [
         qdrant_models.FieldCondition(
-            key="metadata.tenant_id",
-            match=qdrant_models.MatchValue(value=tenant_id)
+            key="metadata.tenant_id", match=qdrant_models.MatchValue(value=tenant_id)
         )
     ]
     if source_file:
         must_conditions.append(
             qdrant_models.FieldCondition(
                 key="metadata.source_file",
-                match=qdrant_models.MatchValue(value=source_file)
+                match=qdrant_models.MatchValue(value=source_file),
             )
         )
     tenant_filter = qdrant_models.Filter(must=must_conditions)
 
     return vector_store.as_retriever(
-        search_type="similarity",
-        search_kwargs={
-            "filter": tenant_filter,
-            "k": limit
-        }
+        search_type="similarity", search_kwargs={"filter": tenant_filter, "k": limit}
     )

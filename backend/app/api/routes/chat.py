@@ -251,14 +251,23 @@ def ask_question(
 
         return StreamingResponse(clarification_stream(), media_type="text/event-stream")
 
-    # 5. Determine active document filter
+    # 5. Determine active document filter & extract rich CSV schema context
     source_file = None
     document_in_focus = None
+    schema_info = None
+    active_doc_id = None
     if conversation.document_id:
-        doc = db.query(DocumentModel).filter(DocumentModel.id == conversation.document_id).first()
+        doc = db.query(DocumentModel).filter(
+            DocumentModel.id == conversation.document_id,
+            DocumentModel.user_id == current_user.id
+        ).first()
         if doc:
             source_file = doc.stored_filename
             document_in_focus = doc.original_filename
+            active_doc_id = str(doc.id)
+            if doc.file_type.lower() == 'csv':
+                from app.api.services.document_service import get_csv_schema_info
+                schema_info = get_csv_schema_info(doc)
 
     # 6. Build list of uploaded files to provide system template context
     uploaded_files_list = [d.original_filename for d in docs]
@@ -274,7 +283,9 @@ def ask_question(
         payload.question,
         history=history,
         uploaded_files_list=uploaded_files_list,
-        document_in_focus=document_in_focus
+        document_in_focus=document_in_focus,
+        document_id=active_doc_id,
+        schema_info=schema_info
     )
 
     provider = get_llm_provider()
@@ -304,13 +315,74 @@ def ask_question(
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
+        # Check if the final response is a JSON tool request
+        clean_answer = full_answer.strip()
+        if clean_answer.startswith("```"):
+            # Strip markdown fence
+            lines = clean_answer.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            clean_answer = "\n".join(lines).strip()
+
+        is_tool_call = False
+        tool_figure = None
+        tool_error = None
+        tool_name = None
+        try:
+            parsed = json.loads(clean_answer)
+            if isinstance(parsed, dict) and parsed.get("type") == "tool":
+                is_tool_call = True
+                tool_name = parsed.get("tool")
+                tool_args = parsed.get("arguments", {})
+                
+                # Execute the tool via ToolRouter
+                from app.tools.router import ToolRouter
+                db_session = SessionLocal()
+                try:
+                    result = ToolRouter.execute(
+                        tool_name=tool_name,
+                        arguments=tool_args,
+                        db=db_session,
+                        user_id=current_user.id
+                    )
+                    tool_figure = result.get("figure")
+                except Exception as e:
+                    logger.error(f"Error executing tool {tool_name}: {str(e)}")
+                    tool_error = str(e)
+                finally:
+                    db_session.close()
+        except json.JSONDecodeError:
+            # Not a JSON tool call, treat as normal message
+            pass
+
+        # Persist response to database
         session = SessionLocal()
         try:
+            if is_tool_call:
+                if tool_figure:
+                    content_to_save = f"Generated {tool_name} chart."
+                    # Emit chart event to the client
+                    yield f"event: chart\ndata: {json.dumps({'figure': tool_figure})}\n\n"
+                    # Add chart URL metadata to sources for DB persistence
+                    if not source_data:
+                        source_data = []
+                    source_data.append({
+                        "type": "chart",
+                        "figure": tool_figure
+                    })
+                else:
+                    content_to_save = f"Failed to execute tool '{tool_name}': {tool_error}"
+                    yield f"data: {json.dumps({'token': f'\\n*Error: {content_to_save}*'})}\n\n"
+            else:
+                content_to_save = full_answer
+
             session.add(
                 Message(
                     conversation_id=conversation_id,
                     role=MessageRole.ASSISTANT.value,
-                    content=full_answer,
+                    content=content_to_save,
                     sources=source_data or None,
                 )
             )

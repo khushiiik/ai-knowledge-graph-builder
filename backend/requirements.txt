@@ -60,4 +60,11 @@ pypdf>=4.0.0
 celery>=5.3.0
 openai
 
+pandas
+plotly
+kaleido
+openpyxl
+python-docx
+reportlab
+networkx
 

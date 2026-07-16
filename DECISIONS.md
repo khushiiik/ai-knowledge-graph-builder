@@ -214,3 +214,19 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 * **Trade-offs**:
   * Less dynamic in choosing arbitrary execution steps on the fly.
   * **At Scale (10,000+ users)**: Yes. Custom rule-based dispatching scales efficiently and eliminates the risks of LLM tool hallucination.
+
+---
+
+## 13. CSV / Structured Data Ingestion Strategy
+
+* **Decision Title**: Lazy Indexing and Pandas-First Ingestion for Structured Data (CSVs/Excel)
+* **Options Considered**: Immediate row-by-row vector embedding, Block-row chunking, Lazy/conditional indexing with Pandas-first execution
+* **Chosen Option**: Lazy/conditional indexing and Pandas-first execution (Pandas for deterministic tasks, LLM/Embeddings only for semantic lookup)
+* **Rationale**:
+  * **Structured vs Unstructured**: CSV files contain highly structured data where each row represents a database record, not a text paragraph. Chunking and embedding every row immediately is highly redundant, expensive, and quickly exhausts LLM/embedding API rate limits.
+  * **Deterministic Operations**: Most operations on CSVs (charts, filtering, statistics, column metadata) are deterministic data operations that can be performed instantly and perfectly using Pandas in Python, requiring zero tokens or embedding calls.
+  * **Lazy Embeddings (On-Demand)**: Store the CSV schema and original file initially and assign `embedding_status = NOT_REQUIRED`. If the user asks a semantic query (e.g. "Find countries similar to Belgium"), only then trigger a background worker task to chunk, embed, and load the CSV records into Qdrant/Neo4j, changing `embedding_status = READY`.
+  * **Block-Row Chunking**: When embedding structured files, never chunk row-by-row. Instead, bundle rows in groups (e.g., 50 rows per chunk) with a markdown header listing columns, reducing token count and chunk count by 50x.
+* **Trade-offs**:
+  * Introduces the state `embedding_status` and triggers dynamic background ingestion on the first semantic search query.
+  * **At Scale (10,000+ users)**: Yes. Avoids indexing thousands of rows that may never be searched semantically, saving vast amounts of compute and API cost.
