@@ -2,35 +2,37 @@ import json
 import uuid
 import os
 import re
+import logging
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
-from app.core.exceptions import ConversationNotFoundException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
+from app.core.exceptions import ConversationNotFoundException
 from app.dependencies import get_db, get_current_active_user, SessionLocal
 from app.models.user import User as UserModel
 from app.models.conversation import Conversation
 from app.models.message import Message, MessageRole
+from app.models.document import Document as DocumentModel
 from app.schemas.chat import AskRequest, AskResponse, ConversationOut, MessageOut
 from app.llm.providers.factory import get_llm_provider
-from app.pipeline.pipeline_runner import get_tenant_retriever
-from app.models.document import Document as DocumentModel
+from app.pipeline.pipeline_runner import run_lazy_indexing
 from app.llm.prompts.chat_prompt import build_chat_messages
 from app.retrieval.semantic_search import retrieve_chunks, build_context_block
 from app.retrieval.graph_search import graph_search
 from app.retrieval.fusion import reciprocal_rank_fusion
+from app.api.services.document_service import get_csv_schema_info
+from app.workers.tasks import lazy_index_spreadsheet_task
+from app.tools.router import ToolRouter
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def normalize_text(text: str) -> str:
-    """Normalize filenames and questions for matching."""
     text = text.lower()
     text = re.sub(r"\.[a-z0-9]+$", "", text)
     text = re.sub(r"[_\-\.\,\!\?\(\)\[\]\{\}]+", " ", text)
@@ -39,11 +41,9 @@ def normalize_text(text: str) -> str:
 
 
 def classify_intent(question: str) -> str:
-    """Classify the user's question intent using rule-based heuristics."""
     q = question.lower().strip().strip("?.!")
     
-    greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "greetings", "yo"}
-    if q in greetings:
+    if q in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening", "greetings", "yo"}:
         return "greeting"
         
     list_keywords = ["list", "show", "what are", "which are", "display"]
@@ -53,22 +53,18 @@ def classify_intent(question: str) -> str:
     if "how many" in q and any(dk in q for dk in doc_keywords):
         return "document_count"
         
-    focus_keywords = ["active", "focus", "focused", "selected", "current"]
-    if any(fk in q for fk in focus_keywords) and any(dk in q for dk in doc_keywords + ["file", "document"]):
+    if any(fk in q for fk in ["active", "focus", "focused", "selected", "current"]) and any(dk in q for dk in doc_keywords + ["file", "document"]):
         return "document_focus"
 
     return "knowledge_query"
 
 
-def _get_or_create_conversation(
-    db: Session, user: UserModel, conversation_id: Optional[uuid.UUID]
-) -> Conversation:
+def _get_or_create_conversation(db: Session, user: UserModel, conversation_id: Optional[uuid.UUID]) -> Conversation:
     if conversation_id:
-        conversation = (
-            db.query(Conversation)
-            .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
-            .first()
-        )
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id, 
+            Conversation.user_id == user.id
+        ).first()
         if not conversation:
             raise ConversationNotFoundException()
         return conversation
@@ -80,27 +76,14 @@ def _get_or_create_conversation(
     return conversation
 
 
-
 @router.post("/ask")
 def ask_question(
     payload: AskRequest,
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ) -> StreamingResponse:
-    """
-    Streaming RAG endpoint.
-
-    1. Gets/creates the conversation and stores the user's message.
-    2. Retrieves the relevant chunks previously embedded and stored in Qdrant
-       (scoped to this user, so retrieval never crosses tenants).
-    3. Streams the LLM's answer back token-by-token as Server-Sent Events, so
-       the frontend can render it as it's generated instead of waiting.
-    4. Once the stream finishes, persists the full assistant reply + which
-       sources it was grounded in.
-    """
     conversation = _get_or_create_conversation(db, current_user, payload.conversation_id)
 
-    # 1. Fetch conversation history for memory before persisting current message
     db_messages = (
         db.query(Message)
         .filter(Message.conversation_id == conversation.id)
@@ -109,22 +92,14 @@ def ask_question(
         .all()
     )
     db_messages.reverse()
-    history = []
-    for msg in db_messages:
-        role = "human" if msg.role == "user" else "ai"
-        history.append((role, msg.content))
+    history = [("human" if msg.role == "user" else "ai", msg.content) for msg in db_messages]
 
-    # Add the current user question to the database
     db.add(Message(conversation_id=conversation.id, role=MessageRole.USER.value, content=payload.question))
     
-    # 2. LLM-based Title Generation (if None or default title is present)
     if conversation.title is None or conversation.title.startswith("New Semantic Session"):
         try:
             title_prompt = [
-                (
-                    "system",
-                    "You are a helpful assistant. Generate a short, concise 3-to-5 word title summarizing the user's question. Do not use quotes or markdown. Return only the title text.",
-                ),
+                ("system", "Generate a short, concise 3-to-5 word title summarizing the user's question. Do not use quotes or markdown. Return only the title text."),
                 ("human", payload.question),
             ]
             provider = get_llm_provider()
@@ -135,22 +110,18 @@ def ask_question(
             
     db.commit()
 
-    # Extract primitive values before the request-scoped session closes
     conversation_id = conversation.id
     conversation_id_str = str(conversation_id)
 
-    # 3. Fetch active documents for this user
     docs = db.query(DocumentModel).filter(
         DocumentModel.user_id == current_user.id,
         DocumentModel.deleted_at.is_(None)
     ).all()
 
-    # Classify intent and route if not a knowledge query
     intent = classify_intent(payload.question)
     if intent != "knowledge_query":
         def simple_stream():
             yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
-            
             if intent == "greeting":
                 reply = "Hello! I am Vectra AI, your Knowledge Graph Builder assistant. Ask me questions about your uploaded documents or upload files to ingest into the database."
             elif intent == "document_list":
@@ -167,10 +138,7 @@ def ask_question(
                     f_doc = next((d for d in docs if d.id == conversation.document_id), None)
                     if f_doc:
                         focused_name = f_doc.original_filename
-                if focused_name:
-                    reply = f"The currently focused document is: **{focused_name}**"
-                else:
-                    reply = "No document is currently focused. Ask a question about a specific document or select one."
+                reply = f"The currently focused document is: **{focused_name}**" if focused_name else "No document is currently focused. Ask a question about a specific document or select one."
             else:
                 reply = "I'm ready to help. What would you like to know?"
                 
@@ -178,23 +146,14 @@ def ask_question(
             
             session = SessionLocal()
             try:
-                session.add(
-                    Message(
-                        conversation_id=conversation_id,
-                        role=MessageRole.ASSISTANT.value,
-                        content=reply,
-                        sources=None
-                    )
-                )
+                session.add(Message(conversation_id=conversation_id, role=MessageRole.ASSISTANT.value, content=reply))
                 session.commit()
             finally:
                 session.close()
-                
             yield "event: done\ndata: {}\n\n"
             
         return StreamingResponse(simple_stream(), media_type="text/event-stream")
 
-    # 4. Check if a document is explicitly mentioned in the query (updates conversation document focus)
     matched_doc = None
     normalized_question = normalize_text(payload.question)
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
@@ -209,19 +168,15 @@ def ask_question(
         conversation.document_id = matched_doc.id
         db.commit()
 
-    # Auto-focus if only 1 document is uploaded and no focus is set
     if not conversation.document_id and len(docs) == 1:
         conversation.document_id = docs[0].id
         db.commit()
 
-    # Check if this query is about "the document" (ambiguous)
-    # Expanded to include csv, xlsx, excel, spreadsheet, docx, sheet
     is_ambiguous_doc_query = bool(re.search(
         r'\b(this|the|that|my|your|uploaded)?\s*(document|file|pdf|csv|xlsx|excel|spreadsheet|sheet|docx)\b', 
         payload.question.lower()
     ))
 
-    # Stream clarification message if ambiguous query and multiple docs are uploaded with no focus
     if not conversation.document_id and len(docs) > 1 and is_ambiguous_doc_query:
         file_list_str = "\n".join(f"- {d.original_filename}" for d in docs)
         clarification_msg = (
@@ -236,14 +191,7 @@ def ask_question(
             
             session = SessionLocal()
             try:
-                session.add(
-                    Message(
-                        conversation_id=conversation_id,
-                        role=MessageRole.ASSISTANT.value,
-                        content=clarification_msg,
-                        sources=None
-                    )
-                )
+                session.add(Message(conversation_id=conversation_id, role=MessageRole.ASSISTANT.value, content=clarification_msg))
                 session.commit()
             finally:
                 session.close()
@@ -251,11 +199,11 @@ def ask_question(
 
         return StreamingResponse(clarification_stream(), media_type="text/event-stream")
 
-    # 5. Determine active document filter & extract rich CSV schema context
     source_file = None
     document_in_focus = None
     schema_info = None
     active_doc_id = None
+    
     if conversation.document_id:
         doc = db.query(DocumentModel).filter(
             DocumentModel.id == conversation.document_id,
@@ -265,14 +213,75 @@ def ask_question(
             source_file = doc.stored_filename
             document_in_focus = doc.original_filename
             active_doc_id = str(doc.id)
-            if doc.file_type.lower() == 'csv':
-                from app.api.services.document_service import get_csv_schema_info
-                schema_info = get_csv_schema_info(doc)
+            if doc.file_type.lower() in ('csv', 'xlsx', 'xls'):
+                if doc.dataset_profile:
+                    try:
+                        profile_dict = doc.dataset_profile
+                        schema_lines = [
+                            f"Row count: {profile_dict.get('row_count')}",
+                            f"Column count: {profile_dict.get('column_count')}",
+                            "Columns:"
+                        ]
+                        for c in profile_dict.get('columns', []):
+                            schema_lines.append(f"  - {c.get('name')} ({c.get('type')}, role: {c.get('role')})")
+                        if profile_dict.get('statistics'):
+                            schema_lines.append("Column Statistics:")
+                            for col, stats in profile_dict['statistics'].items():
+                                schema_lines.append(f"  - {col}: min={stats.get('min')}, max={stats.get('max')}, mean={stats.get('mean')}")
+                        if profile_dict.get('supports'):
+                            schema_lines.append("Capabilities:")
+                            for cap, val in profile_dict['supports'].items():
+                                schema_lines.append(f"  - {cap}: {val}")
+                        schema_info = "\n".join(schema_lines)
+                    except Exception:
+                        schema_info = get_csv_schema_info(doc)
+                else:
+                    schema_info = get_csv_schema_info(doc)
 
-    # 6. Build list of uploaded files to provide system template context
     uploaded_files_list = [d.original_filename for d in docs]
+    
+    if conversation.document_id:
+        doc = db.query(DocumentModel).filter(
+            DocumentModel.id == conversation.document_id,
+            DocumentModel.user_id == current_user.id
+        ).first()
+        if doc and doc.file_type.lower() in ('csv', 'xlsx', 'xls'):
+            is_semantic_query = any(w in payload.question.lower() for w in ('find', 'search', 'similar', 'comment', 'incident', 'feedback', 'complaint', 'mention', 'discuss'))
+            if is_semantic_query:
+                if doc.embedding_status == "NOT_STARTED":
+                    profile = doc.dataset_profile or {}
+                    row_count = profile.get("row_count", 0)
+                    
+                    if row_count < 1000:
+                        run_lazy_indexing(db, doc.id, current_user.id)
+                    else:
+                        doc.embedding_status = "PROCESSING"
+                        db.commit()
+                        lazy_index_spreadsheet_task.delay(str(doc.id), current_user.id)
+                        
+                        def bg_indexing_stream():
+                            yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+                            reply = f"I am building the semantic index for this spreadsheet in the background (dataset size: {row_count} rows). Please repeat your request in a few seconds once it is ready."
+                            yield f"data: {json.dumps({'token': reply})}\n\n"
+                            
+                            session = SessionLocal()
+                            try:
+                                session.add(Message(conversation_id=conversation_id, role=MessageRole.ASSISTANT.value, content=reply))
+                                session.commit()
+                            finally:
+                                session.close()
+                            yield "event: done\ndata: {}\n\n"
+                            
+                        return StreamingResponse(bg_indexing_stream(), media_type="text/event-stream")
+                        
+                elif doc.embedding_status == "PROCESSING":
+                    def waiting_stream():
+                        yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+                        reply = "The semantic index is currently being built in the background. Please wait a few moments and try your query again."
+                        yield f"data: {json.dumps({'token': reply})}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                    return StreamingResponse(waiting_stream(), media_type="text/event-stream")
 
-    # 7. Retrieve chunks (Qdrant) and related facts (Neo4j graph), then fuse
     semantic_chunks = retrieve_chunks(payload.question, tenant_id=current_user.id, limit=4, source_file=source_file)
     graph_facts = graph_search(payload.question, tenant_id=current_user.id, limit=5, source_file=source_file)
     chunks = reciprocal_rank_fusion([semantic_chunks, graph_facts], top_n=6)
@@ -291,10 +300,8 @@ def ask_question(
     provider = get_llm_provider()
 
     def event_stream():
-        # First event tells the client which conversation this reply belongs to
         yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
 
-        # Stream citation details at the start
         source_data = [
             {
                 "text": c.get("text"),
@@ -315,10 +322,8 @@ def ask_question(
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
-        # Check if the final response is a JSON tool request
         clean_answer = full_answer.strip()
         if clean_answer.startswith("```"):
-            # Strip markdown fence
             lines = clean_answer.splitlines()
             if lines[0].startswith("```"):
                 lines = lines[1:]
@@ -330,6 +335,8 @@ def ask_question(
         tool_figure = None
         tool_error = None
         tool_name = None
+        synthesized_reply = None
+        
         try:
             parsed = json.loads(clean_answer)
             if isinstance(parsed, dict) and parsed.get("type") == "tool":
@@ -337,8 +344,6 @@ def ask_question(
                 tool_name = parsed.get("tool")
                 tool_args = parsed.get("arguments", {})
                 
-                # Execute the tool via ToolRouter
-                from app.tools.router import ToolRouter
                 db_session = SessionLocal()
                 try:
                     result = ToolRouter.execute(
@@ -347,34 +352,46 @@ def ask_question(
                         db=db_session,
                         user_id=current_user.id
                     )
-                    tool_figure = result.get("figure")
+                    if tool_name == "chart_generator":
+                        tool_figure = result.get("figure")
+                    elif tool_name == "spreadsheet_query":
+                        query_result = result.get("result", "No result returned")
+                        synthesis_prompt = [
+                            ("system", "You are a helpful data analyst. Convert the raw Pandas query result into a clear, concise conversational explanation for the user. Do not explain the code, just state the facts and results."),
+                            ("human", f"User question: {payload.question}\nRaw Pandas query result:\n{query_result}")
+                        ]
+                        synthesis_response = provider.llm.invoke(synthesis_prompt)
+                        synthesized_reply = str(synthesis_response.content).strip()
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Analysis Result:**\\n{synthesized_reply}'})}\n\n"
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     tool_error = str(e)
+                    if tool_name == "spreadsheet_query":
+                        synthesized_reply = f"Failed to execute spreadsheet query: {str(e)}"
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                 finally:
                     db_session.close()
         except json.JSONDecodeError:
-            # Not a JSON tool call, treat as normal message
             pass
 
-        # Persist response to database
         session = SessionLocal()
         try:
             if is_tool_call:
-                if tool_figure:
+                if tool_name == "chart_generator" and tool_figure:
                     content_to_save = f"Generated {tool_name} chart."
-                    # Emit chart event to the client
                     yield f"event: chart\ndata: {json.dumps({'figure': tool_figure})}\n\n"
-                    # Add chart URL metadata to sources for DB persistence
                     if not source_data:
                         source_data = []
                     source_data.append({
                         "type": "chart",
                         "figure": tool_figure
                     })
+                elif tool_name == "spreadsheet_query" and synthesized_reply:
+                    content_to_save = synthesized_reply
                 else:
                     content_to_save = f"Failed to execute tool '{tool_name}': {tool_error}"
-                    yield f"data: {json.dumps({'token': f'\\n*Error: {content_to_save}*'})}\n\n"
+                    if tool_name != "spreadsheet_query":
+                        yield f"data: {json.dumps({'token': f'\\n*Error: {content_to_save}*'})}\n\n"
             else:
                 content_to_save = full_answer
 
@@ -414,7 +431,6 @@ def get_conversation_messages(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ):
-    """Full message history for a conversation, oldest first -- used to re-hydrate a chat thread."""
     conversation = (
         db.query(Conversation)
         .filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id)
@@ -431,7 +447,6 @@ def delete_conversation(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ):
-    """Delete a conversation and all its messages."""
     conversation = (
         db.query(Conversation)
         .filter(Conversation.id == conversation_id, Conversation.user_id == current_user.id)

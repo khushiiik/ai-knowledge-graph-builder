@@ -1,6 +1,6 @@
 from enum import Enum
 import uuid
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.user import Base
@@ -27,6 +27,8 @@ class Document(Base):
     file_size = Column(Integer, nullable=False)
     checksum = Column(String, nullable=True)
     status = Column(String, default=DocumentStatus.UPLOADING.value, nullable=False)
+    embedding_status = Column(String, default="READY", nullable=False)
+    dataset_profile = Column(JSON, nullable=True)
     raw_text = Column(Text, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

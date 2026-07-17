@@ -217,16 +217,20 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 ---
 
-## 13. CSV / Structured Data Ingestion Strategy
+### 13. CSV / Structured Data Ingestion Strategy
 
 * **Decision Title**: Lazy Indexing and Pandas-First Ingestion for Structured Data (CSVs/Excel)
 * **Options Considered**: Immediate row-by-row vector embedding, Block-row chunking, Lazy/conditional indexing with Pandas-first execution
 * **Chosen Option**: Lazy/conditional indexing and Pandas-first execution (Pandas for deterministic tasks, LLM/Embeddings only for semantic lookup)
 * **Rationale**:
-  * **Structured vs Unstructured**: CSV files contain highly structured data where each row represents a database record, not a text paragraph. Chunking and embedding every row immediately is highly redundant, expensive, and quickly exhausts LLM/embedding API rate limits.
-  * **Deterministic Operations**: Most operations on CSVs (charts, filtering, statistics, column metadata) are deterministic data operations that can be performed instantly and perfectly using Pandas in Python, requiring zero tokens or embedding calls.
-  * **Lazy Embeddings (On-Demand)**: Store the CSV schema and original file initially and assign `embedding_status = NOT_REQUIRED`. If the user asks a semantic query (e.g. "Find countries similar to Belgium"), only then trigger a background worker task to chunk, embed, and load the CSV records into Qdrant/Neo4j, changing `embedding_status = READY`.
-  * **Block-Row Chunking**: When embedding structured files, never chunk row-by-row. Instead, bundle rows in groups (e.g., 50 rows per chunk) with a markdown header listing columns, reducing token count and chunk count by 50x.
+  * **Structured vs Unstructured**: CSV/Excel files are structured datasets, not unstructured text paragraphs. Ingesting and embedding every row immediately wastes compute, storage, and API token limits.
+  * **Deterministic Operations**: Standard analytical requests (statistics, filters, grouping, row counts) are resolved locally and deterministically using Pandas in Python, requiring zero tokens or embedding calls.
+  * **Interactive Visualizations (Plotly)**: Visualizations are generated in-memory using Plotly and serialized directly to JSON format. The figures are streamed using Server-Sent Events (SSE) and stored in the database `sources` column, avoiding local disk writes.
+  * **Metadata Profiling on Ingestion**: Upon upload, the backend profiles spreadsheets using Pandas, generating a versioned JSON metadata profile (detailing row/column counts, columns, data types, statistical ranges, text columns, and supported capabilities). This profile is stored directly in a JSONB `dataset_profile` column on the `Document` model.
+  * **Asynchronous/Threshold-Based Lazy Indexing**: If a user submits a semantic search query against a spreadsheet, the system evaluates the file's size:
+    * If the spreadsheet has **less than 1,000 rows**, lazy indexing runs synchronously in the request thread (completes under 3 seconds).
+    * If the spreadsheet has **1,000 or more rows**, it sets the `embedding_status` to `PROCESSING`, triggers `lazy_index_spreadsheet_task` inside Celery to embed and index the long-text columns in row groups of 50 asynchronously, and returns a friendly waiting message to the user.
+  * **Robust Executor Validation**: The [spreadsheet_tool.py](file:///c:/Users/KHUSHI/OneDrive/Desktop/brainerhub/Projects/ai_knowledge_graph_builder/backend/app/tools/spreadsheet_tool.py) maps columns case-insensitively to prevent typos from the LLM, and enforces type validation checks (e.g. verifying columns are numeric prior to running math aggregations).
 * **Trade-offs**:
-  * Introduces the state `embedding_status` and triggers dynamic background ingestion on the first semantic search query.
-  * **At Scale (10,000+ users)**: Yes. Avoids indexing thousands of rows that may never be searched semantically, saving vast amounts of compute and API cost.
+  * Triggers background task execution dynamically on the first semantic search.
+  * **At Scale (10,000+ users)**: Yes. Eliminates token costs and vector DB index bloating for large sheets that are only queried for charts or metrics.

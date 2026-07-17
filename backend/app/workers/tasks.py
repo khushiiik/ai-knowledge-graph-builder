@@ -5,7 +5,7 @@ from app.workers.celery_app import celery_app
 from app.dependencies import SessionLocal
 from app.models.processing_job import ProcessingJob, ProcessingJobStatus
 from app.models.document import Document, DocumentStatus
-from app.pipeline.pipeline_runner import ingest_document_to_qdrant
+from app.pipeline.pipeline_runner import ingest_document_to_qdrant, run_lazy_indexing
 
 @celery_app.task(
     bind=True,
@@ -70,5 +70,27 @@ def ingest_document_task(self, job_id_str: str, document_id_str: str, file_path:
             job.finished_at = func.now()
             
         db.commit()
+    finally:
+        db.close()
+
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.lazy_index_spreadsheet_task",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 2, "countdown": 5}
+)
+def lazy_index_spreadsheet_task(self, document_id_str: str, tenant_id: int):
+    db: Session = SessionLocal()
+    document_id = uuid.UUID(document_id_str)
+    try:
+        run_lazy_indexing(db, document_id, tenant_id)
+    except Exception as e:
+        db.rollback()
+        if self.request.retries >= self.max_retries:
+            doc = db.query(Document).filter(Document.id == document_id).first()
+            if doc:
+                doc.embedding_status = "FAILED"
+                db.commit()
+        raise e
     finally:
         db.close()

@@ -23,7 +23,30 @@ class ToolRouter:
             f"ToolRouter executing tool '{tool_name}' for user {user_id} with args: {arguments}"
         )
 
-        if tool_name == "chart_generator":
+        if tool_name == "spreadsheet_query":
+            document_id_str = arguments.get("document_id")
+            plan = arguments.get("plan")
+            if not document_id_str:
+                raise ValueError("Missing document_id in arguments")
+            if not plan:
+                raise ValueError("Missing plan in arguments")
+
+            document = (
+                db.query(DocumentModel)
+                .filter(
+                    DocumentModel.id == document_id_str,
+                    DocumentModel.user_id == user_id,
+                )
+                .first()
+            )
+            if not document:
+                raise ValueError("Document not found or access denied")
+
+            from app.tools.spreadsheet_tool import execute_pandas_query
+            result = execute_pandas_query(document.storage_path, plan)
+            return {"result": result}
+
+        elif tool_name == "chart_generator":
             document_id_str = arguments.get("document_id")
             chart_type = arguments.get("chart_type")
             x = arguments.get("x")

@@ -36,9 +36,18 @@ async def lifespan(app: FastAPI):
             """
                 )
             )
+            conn.execute(
+                text(
+                    """
+                ALTER TABLE documents 
+                ADD COLUMN IF NOT EXISTS embedding_status VARCHAR DEFAULT 'READY',
+                ADD COLUMN IF NOT EXISTS dataset_profile JSONB;
+            """
+                )
+            )
         logger.info("Database tables initialized successfully and alter table checked.")
     except Exception as e:
-        logger.error(f"Error checking/adding document_id column: {str(e)}")
+        logger.error(f"Error checking/adding columns: {str(e)}")
     yield
 
 
