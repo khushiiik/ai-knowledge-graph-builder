@@ -84,16 +84,17 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 * **Decision Title**: Chunking Strategy Selection
 * **Options Considered**: Fixed-size character splitter, Semantic splitter, Paragraph-based splitter, RecursiveCharacterTextSplitter
-* **Chosen Option**: LangChain's `RecursiveCharacterTextSplitter` (chunk size 500, overlap 100).
+* **Chosen Option**: LangChain's `RecursiveCharacterTextSplitter` (chunk size 1200, overlap 200).
 * **Rationale**: 
-  * **Why Recursive/Fixed-size over Paragraph Chunking**: Paragraph chunking splits text solely by structural delimiters (like double newlines `\n\n`). While this preserves paragraph boundaries, it results in highly inconsistent chunk sizes. Some paragraphs are excessively long (exceeding token limits), while others are too short to hold sufficient context. `RecursiveCharacterTextSplitter` provides a hybrid, smart fixed-size approach that splits recursively on a list of characters (`\n\n`, `\n`, ` `, `""`), ensuring chunks remain close to the target size (500 characters) while retaining structural layout and avoiding database storage bloating.
-  * **Why Recursive/Fixed-size over Semantic Chunking**: Semantic splitters determine chunk boundaries by calculating sentence-level embeddings and finding points where similarity falls below a threshold. This is computationally expensive, requires calling an embedding model repeatedly for every single sentence boundary during ingestion, increases API/compute latency, and is highly sensitive to similarity threshold settings. Recursive splitting is extremely fast, fully local, and runs in linear time.
-  * **Overlap Size Selection (100 characters)**: We chose an overlap of 100 characters (approximately 15-20 words, or a full medium-length sentence). This size is sufficient to preserve context (like pronouns, subjects, or transition words) across boundaries, preventing context fragmentation when parsing dense text documents. It strikes a balance between keeping adjacent context linked and avoiding excessive index inflation or repetitive retrieval results.
+  * **Why Recursive/Fixed-size over Paragraph Chunking**: Paragraph chunking splits text solely by structural delimiters (like double newlines `\n\n`). While this preserves paragraph boundaries, it results in highly inconsistent chunk sizes. Some paragraphs are excessively long, while others are too short to hold sufficient context. `RecursiveCharacterTextSplitter` provides a hybrid, smart fixed-size approach that splits recursively on a list of characters (`\n\n`, `\n`, ` `, `""`), ensuring chunks remain close to the target size (1200 characters) while retaining structural layout and preventing multi-column table rows from being severed across chunk boundaries.
+  * **Why 1200 Character Chunk Size**: Legacy 500-character chunks cut multi-attribute records and table rows in half. A target size of 1200 characters preserves entire table rows, paragraph blocks, and structured entity details intact inside single chunks.
+  * **Overlap Size Selection (200 characters)**: An overlap of 200 characters preserves structural context across boundaries, preventing context fragmentation when parsing dense text documents and tables.
 * **Trade-offs**: 
   * Relies on heuristic-based splitting rather than true semantic coherence detection.
   * **At Scale (10,000+ users)**: Yes. Simple recursive splitting scales linearly in CPU time and keeps ingestion throughput high.
 
 ---
+
 
 ## 7. Embedding Model
 
@@ -217,20 +218,34 @@ This file documents the major technical decisions made in the AI Knowledge Graph
 
 ---
 
-### 13. CSV / Structured Data Ingestion Strategy
+### 13. CSV / Structured Data Ingestion Strategy & Multi-Format Charting
 
-* **Decision Title**: Lazy Indexing and Pandas-First Ingestion for Structured Data (CSVs/Excel)
+* **Decision Title**: Lazy Indexing, Pandas-First Execution, and Universal Multi-Format Plotly Visualization
 * **Options Considered**: Immediate row-by-row vector embedding, Block-row chunking, Lazy/conditional indexing with Pandas-first execution
-* **Chosen Option**: Lazy/conditional indexing and Pandas-first execution (Pandas for deterministic tasks, LLM/Embeddings only for semantic lookup)
+* **Chosen Option**: Lazy/conditional indexing, Pandas-first execution for spreadsheets, and Universal Plotly rendering for all document types (CSV, Excel, PDF, DOCX, TXT).
 * **Rationale**:
-  * **Structured vs Unstructured**: CSV/Excel files are structured datasets, not unstructured text paragraphs. Ingesting and embedding every row immediately wastes compute, storage, and API token limits.
-  * **Deterministic Operations**: Standard analytical requests (statistics, filters, grouping, row counts) are resolved locally and deterministically using Pandas in Python, requiring zero tokens or embedding calls.
-  * **Interactive Visualizations (Plotly)**: Visualizations are generated in-memory using Plotly and serialized directly to JSON format. The figures are streamed using Server-Sent Events (SSE) and stored in the database `sources` column, avoiding local disk writes.
-  * **Metadata Profiling on Ingestion**: Upon upload, the backend profiles spreadsheets using Pandas, generating a versioned JSON metadata profile (detailing row/column counts, columns, data types, statistical ranges, text columns, and supported capabilities). This profile is stored directly in a JSONB `dataset_profile` column on the `Document` model.
-  * **Asynchronous/Threshold-Based Lazy Indexing**: If a user submits a semantic search query against a spreadsheet, the system evaluates the file's size:
-    * If the spreadsheet has **less than 1,000 rows**, lazy indexing runs synchronously in the request thread (completes under 3 seconds).
-    * If the spreadsheet has **1,000 or more rows**, it sets the `embedding_status` to `PROCESSING`, triggers `lazy_index_spreadsheet_task` inside Celery to embed and index the long-text columns in row groups of 50 asynchronously, and returns a friendly waiting message to the user.
-  * **Robust Executor Validation**: The [spreadsheet_tool.py](file:///c:/Users/KHUSHI/OneDrive/Desktop/brainerhub/Projects/ai_knowledge_graph_builder/backend/app/tools/spreadsheet_tool.py) maps columns case-insensitively to prevent typos from the LLM, and enforces type validation checks (e.g. verifying columns are numeric prior to running math aggregations).
+  * **Structured vs Unstructured**: CSV/Excel files are structured datasets. Ingesting and embedding every row immediately wastes compute, storage, and API token limits. Standard analytical requests (statistics, filters, grouping, row counts) are resolved locally and deterministically using Pandas in Python.
+  * **Universal Multi-Format Visualizations (Plotly)**: Visualizations support both spreadsheet datasets (via Pandas) and text/PDF/DOCX documents (via inline JSON `data` arrays extracted from text contexts). Figures are generated in-memory using Plotly and serialized directly to JSON format, streamed via Server-Sent Events (SSE), and rendered interactively on the frontend.
+  * **Metadata Profiling on Ingestion**: Upon upload, the backend profiles spreadsheets using Pandas, generating a versioned JSON metadata profile (detailing row/column counts, columns, data types, statistical ranges, text columns, and supported capabilities) stored directly in the `dataset_profile` column on the `Document` model.
+  * **Asynchronous/Threshold-Based Lazy Indexing**: If a user submits a semantic search query against a spreadsheet:
+    * Spreadsheets with **less than 1,000 rows** are lazily indexed synchronously (completes under 3 seconds).
+    * Spreadsheets with **1,000+ rows** update `embedding_status` to `PROCESSING`, trigger `lazy_index_spreadsheet_task` in Celery asynchronously, and return a waiting notification.
+  * **Robust Executor Validation**: The [spreadsheet_tool.py](file:///c:/Users/KHUSHI/OneDrive/Desktop/brainerhub/Projects/ai_knowledge_graph_builder/backend/app/tools/spreadsheet_tool.py) maps columns case-insensitively to prevent typos from the LLM, and enforces type validation checks prior to mathematical aggregations.
 * **Trade-offs**:
   * Triggers background task execution dynamically on the first semantic search.
   * **At Scale (10,000+ users)**: Yes. Eliminates token costs and vector DB index bloating for large sheets that are only queried for charts or metrics.
+
+---
+
+### 14. Adaptive Context Retrieval & Complete Data Extraction
+
+* **Decision Title**: Dynamic Retrieval Expansion for Listing, Directory, and Export Queries
+* **Options Considered**: Fixed $K=4$ vector retrieval, Dynamic query-adaptive retrieval ($K=25$), Full document chunk scanning
+* **Chosen Option**: Dynamic query-adaptive retrieval ($K=25$ for listing/directory/table/export queries, $K=10$ for standard QA).
+* **Rationale**:
+  * **Retrieval Bottleneck**: Standard vector search ($K=4$) works well for single-fact answers ("Who is the VP of Engineering?"), but truncates multi-page directories or tables ("List all 40 employees", "Extract all project requirements").
+  * **Adaptive Chunk Scaling**: When the router detects listing, directory, or table extraction intent, it expands retrieval to $K=25$ semantic chunks and fused graph facts. For focused single-document queries, $K=25$ loads 100% of document content into context without truncation.
+* **Trade-offs**:
+  * Increases prompt context length for complex listing queries while preserving single-fact speed for simple questions.
+  * **At Scale (10,000+ users)**: Yes. Ensures zero data loss for reporting while maintaining sub-second responses for targeted queries.
+

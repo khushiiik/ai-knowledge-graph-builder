@@ -8,6 +8,7 @@ import {
   X,
   FileText,
   Upload,
+  Download,
   BarChart3,
   ChevronLeft,
   MessageSquare,
@@ -199,12 +200,15 @@ export default function App() {
         const data = await res.json();
         const mappedMsgs = data.map(m => {
           const chartSource = m.sources ? m.sources.find(s => s.type === 'chart') : null;
-          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart') : null;
+          const downloadSource = m.sources ? m.sources.find(s => s.type === 'download') : null;
+          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart' && s.type !== 'download') : null;
           return {
             sender: m.role,
             text: m.content,
             sources: citations && citations.length > 0 ? citations : null,
-            chartFigure: chartSource ? chartSource.figure : null
+            chartFigure: chartSource ? chartSource.figure : null,
+            downloadUrl: downloadSource ? downloadSource.downloadUrl : null,
+            downloadFilename: downloadSource ? downloadSource.downloadFilename : null
           };
         });
 
@@ -527,7 +531,39 @@ export default function App() {
     }
   };
 
+  // Handle downloading exported spreadsheet files securely
+  const handleDownloadFile = async (downloadUrl, filename) => {
+    try {
+      const targetUrl = downloadUrl.startsWith('http') ? downloadUrl : downloadUrl;
+      const res = await fetch(targetUrl, {
+        headers: {
+          'Authorization': `Bearer ${authToken}`
+        }
+      });
+      if (res.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (!res.ok) {
+        window.open(`${targetUrl}?token=${encodeURIComponent(authToken)}`, '_blank');
+        return;
+      }
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || 'download.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      window.open(`${downloadUrl}?token=${encodeURIComponent(authToken)}`, '_blank');
+    }
+  };
+
   // Stop LLM streaming generation
+
   const stopGenerating = () => {
     if (activeReaderRef.current) {
       activeReaderRef.current.cancel();
@@ -662,6 +698,27 @@ export default function App() {
                   }
                   return c;
                 }));
+              }
+
+              if (payload.downloadUrl !== undefined || currentEvent === 'download') {
+                const dUrl = payload.downloadUrl || payload.download_url;
+                const dFilename = payload.downloadFilename || payload.download_filename || payload.filename;
+                if (dUrl) {
+                  setConversations(prev => prev.map(c => {
+                    if (c.id === currentConvId) {
+                      const msgs = [...c.messages];
+                      if (msgs.length > 0) {
+                        msgs[msgs.length - 1] = {
+                          ...msgs[msgs.length - 1],
+                          downloadUrl: dUrl,
+                          downloadFilename: dFilename
+                        };
+                      }
+                      return { ...c, messages: msgs };
+                    }
+                    return c;
+                  }));
+                }
               }
 
               if (payload.token) {
@@ -1255,17 +1312,101 @@ export default function App() {
                     className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'}`}
                     style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
                   >
-                    <div style={{ whiteSpace: 'pre-line' }}>{msg.text}</div>
+                    <div>{renderMessageText(cleanMessageText(msg.text))}</div>
+                    {(() => {
+                      let downloadUrl = msg.downloadUrl;
+                      let downloadFilename = msg.downloadFilename;
+                      if (!downloadUrl && msg.text) {
+                        const downloadMatch = msg.text.match(/\/documents\/download\/([^\s\)]+)/);
+                        if (downloadMatch) {
+                          downloadUrl = downloadMatch[0];
+                          downloadFilename = downloadMatch[1];
+                        }
+                      }
+                      if (msg.sender === 'assistant' && downloadUrl) {
+                        return (
+                          <div style={{
+                            marginTop: '8px',
+                            background: 'rgba(255, 255, 255, 0.85)',
+                            borderRadius: '12px',
+                            border: '1px solid var(--glass-border)',
+                            padding: '12px 16px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
+                            width: '100%',
+                            maxWidth: '440px',
+                            backdropFilter: 'blur(10px)'
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', overflow: 'hidden' }}>
+                              <div style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '8px',
+                                background: 'rgba(79, 70, 229, 0.12)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0
+                              }}>
+                                <Download size={18} style={{ color: 'var(--accent-color)' }} />
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                                <span style={{
+                                  fontSize: '0.85rem',
+                                  fontWeight: 600,
+                                  color: 'var(--black-magic)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  {downloadFilename || 'exported_data.csv'}
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                  Extracted CSV Spreadsheet &bull; Ready to Download
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleDownloadFile(downloadUrl, downloadFilename)}
+                              style={{
+                                background: 'var(--accent-color, #4f46e5)',
+                                color: '#ffffff',
+                                border: 'none',
+                                padding: '6px 14px',
+                                borderRadius: '8px',
+                                cursor: 'pointer',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                boxShadow: '0 2px 6px rgba(79, 70, 229, 0.2)',
+                                flexShrink: 0,
+                                transition: 'opacity 0.2s'
+                              }}
+                              onMouseOver={(e) => e.currentTarget.style.opacity = 0.9}
+                              onMouseOut={(e) => e.currentTarget.style.opacity = 1}
+                            >
+                              <span>Download CSV</span>
+                            </button>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     {msg.chartFigure && (
                       <div className="chart-container" style={{ marginTop: '12px', width: '100%' }}>
                         <PlotlyChart figure={msg.chartFigure} />
                       </div>
                     )}
-                    {msg.sender === 'assistant' && msg.sources && msg.sources.length > 0 && (
+                    {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.source).length > 0 && (
                       <div className="citations-container" style={{ marginTop: '8px', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: '8px', width: '100%' }}>
                         <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Sources:</div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {msg.sources.map((src, sIdx) => {
+                          {msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.source).map((src, sIdx) => {
                             const name = src.source;
                             const pageText = src.page !== null && src.page !== undefined ? ` (Page ${src.page + 1})` : '';
                             const typeText = src.type === 'graph' ? ' [Graph Fact]' : '';
@@ -1436,6 +1577,194 @@ export default function App() {
       )}
     </>
   );
+}
+
+function renderMessageText(text) {
+  if (!text) return "";
+
+  const lines = text.split("\n");
+  const blocks = [];
+  let currentTable = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+
+    // Detect Markdown Table row (e.g. | col1 | col2 |)
+    if (line.startsWith("|") && line.endsWith("|")) {
+      if (!currentTable) {
+        currentTable = [];
+      }
+      // Ignore delimiter lines (like |---|---| or | --- | --- |)
+      if (!/^\|[\s\-:\t|]+\|$/.test(line)) {
+        const cells = line.split("|").slice(1, -1).map(c => c.trim());
+        currentTable.push(cells);
+      }
+      continue;
+    }
+
+    // End of table block if non-table line is encountered
+    if (currentTable) {
+      blocks.push({ type: "table", rows: currentTable });
+      currentTable = null;
+    }
+
+    if (!line) {
+      blocks.push({ type: "spacer" });
+      continue;
+    }
+
+    // Heading blocks (# Heading)
+    if (line.startsWith("### ")) {
+      blocks.push({ type: "h3", content: line.slice(4) });
+    } else if (line.startsWith("## ")) {
+      blocks.push({ type: "h2", content: line.slice(3) });
+    } else if (line.startsWith("# ")) {
+      blocks.push({ type: "h1", content: line.slice(2) });
+    } else if (line.startsWith("- ") || line.startsWith("* ")) {
+      blocks.push({ type: "bullet", content: line.slice(2) });
+    } else {
+      blocks.push({ type: "paragraph", content: line });
+    }
+  }
+
+  if (currentTable) {
+    blocks.push({ type: "table", rows: currentTable });
+  }
+
+  return (
+    <div className="rendered-markdown" style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
+      {blocks.map((block, idx) => {
+        if (block.type === "spacer") {
+          return <div key={idx} style={{ height: '4px' }} />;
+        }
+
+        if (block.type === "table") {
+          const [header, ...bodyRows] = block.rows;
+          return (
+            <div key={idx} style={{ overflowX: 'auto', margin: '8px 0', borderRadius: '10px', border: '1px solid rgba(0,0,0,0.08)', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.85rem', background: '#ffffff' }}>
+                {header && (
+                  <thead style={{ background: 'rgba(79, 70, 229, 0.08)', borderBottom: '2px solid rgba(79, 70, 229, 0.2)' }}>
+                    <tr>
+                      {header.map((cell, cIdx) => (
+                        <th key={cIdx} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, color: 'var(--black-magic)' }}>
+                          {formatInlineMarkdown(cell)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                )}
+                <tbody>
+                  {bodyRows.map((row, rIdx) => (
+                    <tr key={rIdx} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)', background: rIdx % 2 === 0 ? '#ffffff' : 'rgba(0,0,0,0.02)' }}>
+                      {row.map((cell, cIdx) => (
+                        <td key={cIdx} style={{ padding: '8px 12px', color: '#2d3748' }}>
+                          {formatInlineMarkdown(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+
+        if (block.type === "h1" || block.type === "h2" || block.type === "h3") {
+          const fontSize = block.type === "h1" ? "1.2rem" : block.type === "h2" ? "1.05rem" : "0.95rem";
+          return (
+            <div key={idx} style={{ fontWeight: 700, fontSize, marginTop: '8px', color: 'var(--black-magic)' }}>
+              {formatInlineMarkdown(block.content)}
+            </div>
+          );
+        }
+
+        if (block.type === "bullet") {
+          return (
+            <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', paddingLeft: '4px' }}>
+              <span style={{ color: 'var(--accent-color, #4f46e5)', fontWeight: 'bold', fontSize: '0.9rem' }}>•</span>
+              <div>{formatInlineMarkdown(block.content)}</div>
+            </div>
+          );
+        }
+
+        return (
+          <div key={idx}>
+            {formatInlineMarkdown(block.content)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function formatInlineMarkdown(text) {
+  if (!text) return "";
+
+  const regex = /(\*\*.*?\*\*|\[.*?\]\(.*?\))/g;
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("**") && token.endsWith("**")) {
+      parts.push(<strong key={match.index} style={{ fontWeight: 700, color: 'var(--black-magic)' }}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith("[")) {
+      const linkMatch = token.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkMatch) {
+        parts.push(
+          <a
+            key={match.index}
+            href={linkMatch[2]}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: 'var(--accent-color, #4f46e5)',
+              textDecoration: 'underline',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            {linkMatch[1]}
+          </a>
+        );
+      } else {
+        parts.push(token);
+      }
+    }
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+function cleanMessageText(text) {
+  if (!text) return "";
+  let clean = text;
+  // Clean tool call JSON payloads completely
+  clean = clean.replace(/^\s*\{[\s\S]*?"type"\s*:\s*"tool"[\s\S]*?\}/g, '').trim();
+  if (clean.startsWith('{') && clean.includes('"tool"')) {
+    const lastIndex = clean.lastIndexOf('}');
+    if (lastIndex !== -1) {
+      clean = clean.slice(lastIndex + 1).trim();
+    }
+  }
+  // Strip any leftover stray JSON braces
+  clean = clean.replace(/^\s*\}\s*/, '').trim();
+  clean = clean.replace(/\s*\}\s*$/, '').trim();
+
+  // Strip duplicate raw markdown download links so the rich card UI displays cleanly below
+  clean = clean.replace(/\[Download [^\]]+\]\(\/documents\/download\/[^\)]+\)/gi, '');
+  clean = clean.replace(/You can download the file here:\s*/gi, '');
+  return clean.trim();
 }
 
 function PlotlyChart({ figure }) {

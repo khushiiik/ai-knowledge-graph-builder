@@ -6,13 +6,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.document import router as documents_router
 from app.api.routes.chat import router as chat_router
 from app.api.routes.chart import router as chart_router
-from app.models.user import Base
-from app.models.document import Document
-from app.models.processing_job import ProcessingJob
-from app.models.conversation import Conversation
-from app.models.message import Message
-from app.models.chunk import Chunk
-from app.dependencies import engine
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,33 +15,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing database tables...")
-    Base.metadata.create_all(bind=engine)
-    # Add document_id column to conversations table if it doesn't exist
-    from sqlalchemy import text
-
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                ALTER TABLE conversations 
-                ADD COLUMN IF NOT EXISTS document_id UUID REFERENCES documents(id) ON DELETE SET NULL;
-            """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                ALTER TABLE documents 
-                ADD COLUMN IF NOT EXISTS embedding_status VARCHAR DEFAULT 'READY',
-                ADD COLUMN IF NOT EXISTS dataset_profile JSONB;
-            """
-                )
-            )
-        logger.info("Database tables initialized successfully and alter table checked.")
-    except Exception as e:
-        logger.error(f"Error checking/adding columns: {str(e)}")
+    logger.info("Starting up application...")
     yield
 
 

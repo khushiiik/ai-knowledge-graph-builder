@@ -1,12 +1,20 @@
+import os
 from typing import List
 from uuid import UUID
-from fastapi import APIRouter, Depends, UploadFile, File, Request, status
+from fastapi import APIRouter, Depends, UploadFile, File, Request, status, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
 
-from app.core.exceptions import DocumentNotFoundException, FileStorageSaveException, IngestionQueueException
+from app.core.exceptions import (
+    DocumentNotFoundException,
+    FileStorageSaveException,
+    IngestionQueueException,
+    CredentialsValidationException
+)
+from app.core.security import decode_access_token
 from app.config import settings
 from app.models.chunk import Chunk as ChunkModel
 from app.db.neo4j_client import delete_document_facts
@@ -32,20 +40,16 @@ async def upload_document(
     current_user: UserModel = Depends(get_current_active_user)
 ) -> DocumentModel:
     """Upload a file, validate it, and create a document record."""
-    # Perform strict validators check (sizes, types, etc.)
     validate_uploaded_file(file, request)
 
     try:
-        # Save file to storage
         stored_filename, storage_path, file_size, checksum = save_upload_file(file)
     except Exception as e:
         raise FileStorageSaveException(str(e))
 
-    # Determine file type / extension
     file_type = file.filename.split(".")[-1] if file.filename and "." in file.filename else "unknown"
     mime_type = file.content_type or "application/octet-stream"
 
-    # Create model record with initial QUEUED status
     new_doc = DocumentModel(
         user_id=current_user.id,
         original_filename=file.filename or "unknown",
@@ -61,7 +65,6 @@ async def upload_document(
     db.commit()
     db.refresh(new_doc)
 
-    # Create ProcessingJob record
     job = ProcessingJob(
         user_id=current_user.id,
         document_id=new_doc.id,
@@ -72,7 +75,6 @@ async def upload_document(
     db.commit()
     db.refresh(job)
 
-    # Trigger Celery background task
     try:
         ingest_document_task.delay(
             job_id_str=str(job.id),
@@ -82,7 +84,6 @@ async def upload_document(
             tenant_id=current_user.id
         )
     except Exception as e:
-        # If task queueing fails, mark job and document as failed
         new_doc.status = DocumentStatus.FAILED.value
         job.status = ProcessingJobStatus.FAILED.value
         job.error_message = f"Failed to queue task: {str(e)}"
@@ -177,13 +178,9 @@ def delete_document(
     if not doc:
         raise DocumentNotFoundException()
 
-    # 1. Delete physical file from storage
     delete_stored_file(doc.storage_path)
-
-    # 2. Delete PostgreSQL Chunks
     db.query(ChunkModel).filter(ChunkModel.document_id == document_id).delete()
 
-    # 3. Delete from Qdrant Vector database
     try:
         qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
         client = QdrantClient(url=qdrant_url)
@@ -207,15 +204,60 @@ def delete_document(
     except Exception as qe:
         print(f"Error deleting Qdrant vectors: {qe}")
 
-    # 4. Delete from Neo4j Graph database
     try:
         delete_document_facts(user_id=current_user.id, source_file=doc.stored_filename)
     except Exception as ne:
         print(f"Error deleting Neo4j facts: {ne}")
 
-    # 5. Perform soft delete in database for the Document record
     doc.status = DocumentStatus.DELETED.value
     doc.deleted_at = func.now()
     db.commit()
 
     return {"message": "Document and all matching vector/graph chunks deleted successfully"}
+
+
+@router.get("/download/{filename}")
+def download_export(
+    filename: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Serves a generated export file, enforcing strict user data isolation.
+    Accepts authentication via Authorization header or ?token= query parameter.
+    """
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    if not token:
+        token = request.query_params.get("token")
+
+    if not token:
+        raise CredentialsValidationException()
+
+    payload = decode_access_token(token)
+    if not payload:
+        raise CredentialsValidationException()
+    email = payload.get("sub")
+    if not email:
+        raise CredentialsValidationException()
+
+    user = db.query(UserModel).filter(UserModel.email == email).first()
+    if not user or not user.is_active:
+        raise CredentialsValidationException()
+
+    file_path = os.path.join("storage", "exports", str(user.id), filename)
+
+    resolved_path = os.path.normpath(os.path.abspath(file_path))
+    expected_prefix = os.path.normpath(os.path.abspath(os.path.join("storage", "exports", str(user.id))))
+    if not os.path.normcase(resolved_path).startswith(os.path.normcase(expected_prefix)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export file not found")
+
+    return FileResponse(file_path, filename=filename)
+
+
+

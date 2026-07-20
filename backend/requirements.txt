@@ -67,4 +67,4 @@ openpyxl
 python-docx
 reportlab
 networkx
-
+alembic>=1.13.0

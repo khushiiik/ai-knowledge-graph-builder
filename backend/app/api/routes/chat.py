@@ -40,6 +40,15 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def clean_doc_name(name: str) -> str:
+    base = re.sub(r"\.[a-z0-9]+$", "", name.lower())
+    base = re.sub(r"[\(\[\-_]?\s*\d+\s*[\)\]]?", " ", base)
+    base = re.sub(r"\bcopy\b", " ", base)
+    base = re.sub(r"[_\-\.\,\!\?\(\)\[\]\{\}]+", " ", base)
+    return re.sub(r"\s+", " ", base).strip()
+
+
+
 def classify_intent(question: str) -> str:
     q = question.lower().strip().strip("?.!")
     
@@ -112,9 +121,10 @@ def ask_question(
 
     conversation_id = conversation.id
     conversation_id_str = str(conversation_id)
+    user_id = current_user.id
 
     docs = db.query(DocumentModel).filter(
-        DocumentModel.user_id == current_user.id,
+        DocumentModel.user_id == user_id,
         DocumentModel.deleted_at.is_(None)
     ).all()
 
@@ -156,13 +166,22 @@ def ask_question(
 
     matched_doc = None
     normalized_question = normalize_text(payload.question)
+    cleaned_question = clean_doc_name(payload.question)
     sorted_docs = sorted(docs, key=lambda d: len(d.original_filename), reverse=True)
     for doc in sorted_docs:
         norm_name = normalize_text(doc.original_filename)
-        if (norm_name in normalized_question) or \
-           (len(norm_name) > 3 and all(w in normalized_question.split() for w in norm_name.split())):
+        clean_name = clean_doc_name(doc.original_filename)
+        if (norm_name in normalized_question) or (clean_name and clean_name in cleaned_question):
             matched_doc = doc
             break
+
+        clean_words = [w for w in clean_name.split() if len(w) > 2]
+        if clean_words:
+            matched_count = sum(1 for w in clean_words if w in cleaned_question.split())
+            if matched_count / len(clean_words) >= 0.5:
+                matched_doc = doc
+                break
+
 
     if matched_doc:
         conversation.document_id = matched_doc.id
@@ -177,7 +196,13 @@ def ask_question(
         payload.question.lower()
     ))
 
-    if not conversation.document_id and len(docs) > 1 and is_ambiguous_doc_query:
+    # Explicit CSV / Excel export intent detection
+    is_export_requested = any(k in payload.question.lower() for k in [
+        "csv", "excel", "spreadsheet", "export", "download csv", "make csv", 
+        "create csv", "provide csv", "generate csv", "give me csv", "give csv", "provide me csv", "tabular"
+    ])
+
+    if not conversation.document_id and len(docs) > 1 and is_ambiguous_doc_query and not is_export_requested:
         file_list_str = "\n".join(f"- {d.original_filename}" for d in docs)
         clarification_msg = (
             f"I see you have multiple documents uploaded. Which document are you referring to?\n\n"
@@ -199,6 +224,67 @@ def ask_question(
 
         return StreamingResponse(clarification_stream(), media_type="text/event-stream")
 
+    if is_export_requested:
+        def csv_export_stream():
+            yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+            
+            db_session = SessionLocal()
+            try:
+                doc_id = conversation.document_id
+                fmt = "excel" if ("excel" in payload.question.lower() or "xlsx" in payload.question.lower()) else "csv"
+                result = ToolRouter.execute(
+                    tool_name="spreadsheet_export",
+                    arguments={
+                        "document_id": str(doc_id) if doc_id else "<document_id>",
+                        "query": payload.question,
+                        "format": fmt
+                    },
+                    db=db_session,
+                    user_id=user_id
+                )
+                
+                download_url = result.get("download_url")
+                download_filename = result.get("filename", "exported_data.csv")
+                record_count = result.get("record_count", 0)
+                
+                reply = (
+                    f"I have successfully extracted {record_count} structured record(s) from your document based on your request. "
+                    f"You can download the file here: [Download {download_filename}]({download_url})"
+                )
+                
+                yield f"data: {json.dumps({'token': reply})}\n\n"
+                yield f"event: download\ndata: {json.dumps({'downloadUrl': download_url, 'downloadFilename': download_filename})}\n\n"
+                
+                source_data = [{
+                    "type": "download",
+                    "downloadUrl": download_url,
+                    "downloadFilename": download_filename
+                }]
+                
+                db_session.add(Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.ASSISTANT.value,
+                    content=reply,
+                    sources=source_data
+                ))
+                db_session.commit()
+            except Exception as e:
+                logger.error(f"CSV Export stream error: {str(e)}")
+                err_msg = f"Failed to generate CSV file: {str(e)}"
+                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+                db_session.add(Message(
+                    conversation_id=conversation_id,
+                    role=MessageRole.ASSISTANT.value,
+                    content=err_msg
+                ))
+                db_session.commit()
+            finally:
+                db_session.close()
+                
+            yield "event: done\ndata: {}\n\n"
+
+        return StreamingResponse(csv_export_stream(), media_type="text/event-stream")
+
     source_file = None
     document_in_focus = None
     schema_info = None
@@ -207,7 +293,7 @@ def ask_question(
     if conversation.document_id:
         doc = db.query(DocumentModel).filter(
             DocumentModel.id == conversation.document_id,
-            DocumentModel.user_id == current_user.id
+            DocumentModel.user_id == user_id
         ).first()
         if doc:
             source_file = doc.stored_filename
@@ -243,7 +329,7 @@ def ask_question(
     if conversation.document_id:
         doc = db.query(DocumentModel).filter(
             DocumentModel.id == conversation.document_id,
-            DocumentModel.user_id == current_user.id
+            DocumentModel.user_id == user_id
         ).first()
         if doc and doc.file_type.lower() in ('csv', 'xlsx', 'xls'):
             is_semantic_query = any(w in payload.question.lower() for w in ('find', 'search', 'similar', 'comment', 'incident', 'feedback', 'complaint', 'mention', 'discuss'))
@@ -253,11 +339,11 @@ def ask_question(
                     row_count = profile.get("row_count", 0)
                     
                     if row_count < 1000:
-                        run_lazy_indexing(db, doc.id, current_user.id)
+                        run_lazy_indexing(db, doc.id, user_id)
                     else:
                         doc.embedding_status = "PROCESSING"
                         db.commit()
-                        lazy_index_spreadsheet_task.delay(str(doc.id), current_user.id)
+                        lazy_index_spreadsheet_task.delay(str(doc.id), user_id)
                         
                         def bg_indexing_stream():
                             yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
@@ -282,9 +368,20 @@ def ask_question(
                         yield "event: done\ndata: {}\n\n"
                     return StreamingResponse(waiting_stream(), media_type="text/event-stream")
 
-    semantic_chunks = retrieve_chunks(payload.question, tenant_id=current_user.id, limit=4, source_file=source_file)
-    graph_facts = graph_search(payload.question, tenant_id=current_user.id, limit=5, source_file=source_file)
-    chunks = reciprocal_rank_fusion([semantic_chunks, graph_facts], top_n=6)
+    is_comprehensive_query = any(w in payload.question.lower() for w in (
+        'list', 'all', 'every', 'who', 'show', 'filter', 'employee', 'project',
+        'summary', 'directory', 'table', 'report', 'detail', 'complete', 'name',
+        'item', 'give me', 'provide', 'bring', 'find all', 'count', 'tenure', 'years',
+        'working', 'department', 'position', 'location'
+    ))
+
+    sem_limit = 25 if is_comprehensive_query else 10
+    top_fused = 25 if is_comprehensive_query else 10
+
+    semantic_chunks = retrieve_chunks(payload.question, tenant_id=user_id, limit=sem_limit, source_file=source_file)
+    graph_facts = graph_search(payload.question, tenant_id=user_id, limit=15, source_file=source_file)
+    chunks = reciprocal_rank_fusion([semantic_chunks, graph_facts], top_n=top_fused)
+
 
     context = build_context_block(chunks)
     messages = build_chat_messages(
@@ -338,7 +435,14 @@ def ask_question(
         synthesized_reply = None
         
         try:
-            parsed = json.loads(clean_answer)
+            json_match = re.search(r"\{[\s\S]*\}", clean_answer)
+
+            parsed = None
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(0))
+                except Exception:
+                    pass
             if isinstance(parsed, dict) and parsed.get("type") == "tool":
                 is_tool_call = True
                 tool_name = parsed.get("tool")
@@ -350,7 +454,7 @@ def ask_question(
                         tool_name=tool_name,
                         arguments=tool_args,
                         db=db_session,
-                        user_id=current_user.id
+                        user_id=user_id
                     )
                     if tool_name == "chart_generator":
                         tool_figure = result.get("figure")
@@ -363,11 +467,22 @@ def ask_question(
                         synthesis_response = provider.llm.invoke(synthesis_prompt)
                         synthesized_reply = str(synthesis_response.content).strip()
                         yield f"data: {json.dumps({'token': f'\\n\\n**Analysis Result:**\\n{synthesized_reply}'})}\n\n"
+                    elif tool_name == "spreadsheet_export":
+                        download_url = result.get("download_url")
+                        download_filename = result.get("filename", "exported_data.csv")
+                        record_count = result.get("record_count", 0)
+                        reply = f"I have successfully extracted {record_count} structured record(s) based on your request. You can download the file here: [Download {download_filename}]({download_url})"
+                        synthesized_reply = reply
+                        yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
+                        yield f"event: download\ndata: {json.dumps({'downloadUrl': download_url, 'downloadFilename': download_filename})}\n\n"
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     tool_error = str(e)
                     if tool_name == "spreadsheet_query":
                         synthesized_reply = f"Failed to execute spreadsheet query: {str(e)}"
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
+                    elif tool_name == "spreadsheet_export":
+                        synthesized_reply = f"Failed to execute spreadsheet export: {str(e)}"
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                 finally:
                     db_session.close()
@@ -386,11 +501,20 @@ def ask_question(
                         "type": "chart",
                         "figure": tool_figure
                     })
-                elif tool_name == "spreadsheet_query" and synthesized_reply:
+                elif tool_name in ("spreadsheet_query", "spreadsheet_export") and synthesized_reply:
                     content_to_save = synthesized_reply
+                    if tool_name == "spreadsheet_export" and 'result' in locals() and isinstance(result, dict) and result.get("download_url"):
+                        if not source_data:
+                            source_data = []
+                        source_data.append({
+                            "type": "download",
+                            "downloadUrl": result.get("download_url"),
+                            "downloadFilename": result.get("filename", "exported_data.csv")
+                        })
+
                 else:
                     content_to_save = f"Failed to execute tool '{tool_name}': {tool_error}"
-                    if tool_name != "spreadsheet_query":
+                    if tool_name not in ("spreadsheet_query", "spreadsheet_export"):
                         yield f"data: {json.dumps({'token': f'\\n*Error: {content_to_save}*'})}\n\n"
             else:
                 content_to_save = full_answer

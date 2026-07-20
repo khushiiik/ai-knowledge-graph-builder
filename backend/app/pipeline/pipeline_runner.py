@@ -229,7 +229,8 @@ def ingest_document_to_qdrant(
 
     # 3. Chunk text
     _update_job_progress(db, job_id, 50, "Chunking document text")
-    chunks = chunk_documents(docs, chunk_size=500, chunk_overlap=100)
+    chunks = chunk_documents(docs, chunk_size=1200, chunk_overlap=200)
+
 
     # 4. Generate IDs and save Chunk entities to Postgres
     _update_job_progress(db, job_id, 70, "Persisting chunks to database")
