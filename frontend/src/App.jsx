@@ -19,8 +19,44 @@ import {
   User,
   Lock,
   Mail,
-  Edit2
+  Edit2,
+  BookOpen,
+  Layers,
+  Copy,
+  Check
 } from 'lucide-react';
+
+const resolveDocumentName = (rawSource, docs = []) => {
+  if (!rawSource) return 'Knowledge Base';
+
+  // Try exact match with stored_filename, id, or name
+  const match = docs.find(d => 
+    d.stored_filename === rawSource || 
+    d.id === rawSource || 
+    d.name === rawSource ||
+    (d.stored_filename && rawSource.includes(d.stored_filename)) ||
+    (d.id && rawSource.includes(d.id))
+  );
+  if (match) return match.name;
+
+  // Try UUID match
+  const uuidMatch = rawSource.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (uuidMatch) {
+    const uuidStr = uuidMatch[1];
+    const docByUuid = docs.find(d => d.id === uuidStr || (d.stored_filename && d.stored_filename.includes(uuidStr)));
+    if (docByUuid) return docByUuid.name;
+    
+    // If user has uploaded 1 document, default to it
+    if (docs.length === 1 && docs[0].name) {
+      return docs[0].name;
+    }
+
+    const ext = rawSource.includes('.') ? '.' + rawSource.split('.').pop() : '';
+    return `Doc-${uuidStr.slice(0, 8)}${ext}`;
+  }
+
+  return rawSource;
+};
 
 export default function App() {
   const vectraModel = "Vectra Mini";
@@ -56,6 +92,9 @@ export default function App() {
 
   // Modal State
   const [showDocsModal, setShowDocsModal] = useState(false);
+  const [sourcesModalData, setSourcesModalData] = useState(null); // { sources: [...] }
+  const [sourcesFilterTab, setSourcesFilterTab] = useState('all'); // 'all' | 'vector' | 'graph'
+  const [copiedIdx, setCopiedIdx] = useState(null);
 
   // Uploading States
   const [isUploading, setIsUploading] = useState(false);
@@ -247,6 +286,7 @@ export default function App() {
         const mapped = data.map(doc => ({
           id: doc.id,
           name: doc.original_filename,
+          stored_filename: doc.stored_filename,
           size: `${(doc.file_size / (1024 * 1024)).toFixed(2)} MB`,
           type: doc.file_type.toUpperCase(),
           status: doc.status,
@@ -1309,8 +1349,14 @@ export default function App() {
                 {activeConversation.messages.map((msg, i) => (
                   <div
                     key={i}
-                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'}`}
-                    style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
+                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure ? 'has-chart' : ''}`}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      width: msg.chartFigure ? '100%' : undefined,
+                      maxWidth: msg.chartFigure ? '100%' : undefined
+                    }}
                   >
                     <div>{renderMessageText(cleanMessageText(msg.text))}</div>
                     {(() => {
@@ -1402,35 +1448,24 @@ export default function App() {
                         <PlotlyChart figure={msg.chartFigure} />
                       </div>
                     )}
-                    {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.source).length > 0 && (
-                      <div className="citations-container" style={{ marginTop: '8px', borderTop: '1px solid rgba(0,0,0,0.06)', paddingTop: '8px', width: '100%' }}>
-                        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '6px' }}>Sources:</div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.source).map((src, sIdx) => {
-                            const name = src.source;
-                            const pageText = src.page !== null && src.page !== undefined ? ` (Page ${src.page + 1})` : '';
-                            const typeText = src.type === 'graph' ? ' [Graph Fact]' : '';
-                            return (
-                              <div
-                                key={sIdx}
-                                className="citation-badge"
-                                title={src.text}
-                                onClick={() => alert(`Citation passage:\n"${src.text}"`)}
-                                style={{
-                                  fontSize: '0.72rem',
-                                  background: 'rgba(255,255,255,0.6)',
-                                  border: '1px solid var(--glass-border)',
-                                  padding: '4px 8px',
-                                  borderRadius: '6px',
-                                  cursor: 'pointer',
-                                  color: 'var(--black-magic)'
-                                }}
-                              >
-                                {name}{pageText}{typeText}
-                              </div>
-                            );
-                          })}
-                        </div>
+                    {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text)).length > 0 && (
+                      <div className="message-sources-footer">
+                        <button
+                          type="button"
+                          className="sources-trigger-btn"
+                          onClick={() => {
+                            setSourcesFilterTab('all');
+                            setSourcesModalData({
+                              sources: msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text))
+                            });
+                          }}
+                        >
+                          <BookOpen size={14} className="sources-btn-icon" />
+                          <span>Sources</span>
+                          <span className="sources-count-badge">
+                            {msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text)).length}
+                          </span>
+                        </button>
                       </div>
                     )}
                   </div>
@@ -1571,6 +1606,144 @@ export default function App() {
                 </div>
               </div>
             </>
+          )}
+
+          {/* SOURCES MODAL POPUP */}
+          {sourcesModalData && (
+            <div className="sources-modal-backdrop" onClick={() => setSourcesModalData(null)}>
+              <div className="sources-modal-window" onClick={(e) => e.stopPropagation()}>
+                {/* Modal Header */}
+                <div className="sources-modal-header">
+                  <div className="sources-modal-header-left">
+                    <div className="sources-modal-header-icon">
+                      <BookOpen size={20} />
+                    </div>
+                    <div>
+                      <h3 className="sources-modal-title">Sources & References</h3>
+                      <div className="sources-modal-subtitle">
+                        {sourcesModalData.sources.length} retrieved passage{sourcesModalData.sources.length === 1 ? '' : 's'} used for this response
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    className="sources-modal-close-btn"
+                    onClick={() => setSourcesModalData(null)}
+                    title="Close sources"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Filter Tabs */}
+                {(() => {
+                  const vectorCount = sourcesModalData.sources.filter(s => s.type !== 'graph').length;
+                  const graphCount = sourcesModalData.sources.filter(s => s.type === 'graph').length;
+                  if (vectorCount > 0 && graphCount > 0) {
+                    return (
+                      <div className="sources-modal-tabs">
+                        <button
+                          className={`sources-tab-btn ${sourcesFilterTab === 'all' ? 'active' : ''}`}
+                          onClick={() => setSourcesFilterTab('all')}
+                        >
+                          All Sources ({sourcesModalData.sources.length})
+                        </button>
+                        <button
+                          className={`sources-tab-btn ${sourcesFilterTab === 'vector' ? 'active' : ''}`}
+                          onClick={() => setSourcesFilterTab('vector')}
+                        >
+                          <Database size={13} /> Vector DB ({vectorCount})
+                        </button>
+                        <button
+                          className={`sources-tab-btn ${sourcesFilterTab === 'graph' ? 'active' : ''}`}
+                          onClick={() => setSourcesFilterTab('graph')}
+                        >
+                          <Layers size={13} /> Knowledge Graph ({graphCount})
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+
+                {/* Modal Body List */}
+                <div className="sources-modal-body">
+                  {sourcesModalData.sources
+                    .filter(s => {
+                      if (sourcesFilterTab === 'vector') return s.type !== 'graph';
+                      if (sourcesFilterTab === 'graph') return s.type === 'graph';
+                      return true;
+                    })
+                    .map((src, idx) => {
+                      const isGraph = src.type === 'graph';
+                      const docName = resolveDocumentName(src.source, documents);
+                      const pageNum = src.page !== null && src.page !== undefined ? src.page + 1 : null;
+                      const isCopied = copiedIdx === idx;
+
+                      return (
+                        <div key={idx} className="source-card">
+                          {/* Source Header */}
+                          <div className="source-card-header">
+                            <div className="source-card-doc-info">
+                              <div className={`source-card-doc-icon ${isGraph ? 'graph' : 'vector'}`}>
+                                {isGraph ? <Layers size={15} /> : <FileText size={15} />}
+                              </div>
+                              <span className="source-card-doc-name" title={src.source || 'Knowledge Base'}>
+                                {docName}
+                              </span>
+                            </div>
+
+                            <div className="source-card-badges">
+                              {pageNum !== null && (
+                                <span className="source-badge page-badge">
+                                  Page {pageNum}
+                                </span>
+                              )}
+                              {isGraph ? (
+                                <span className="source-badge graph-badge">
+                                  <Layers size={11} /> Graph Fact
+                                </span>
+                              ) : (
+                                <span className="source-badge vector-badge">
+                                  <Database size={11} /> Vector Search
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Source Passage Content */}
+                          {src.text && (
+                            <div className="source-card-text">
+                              {src.text}
+                            </div>
+                          )}
+
+                          {/* Source Card Footer */}
+                          <div className="source-card-footer">
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                              Passage #{idx + 1}
+                            </span>
+                            {src.text && (
+                              <button
+                                className="source-card-copy-btn"
+                                onClick={() => {
+                                  if (navigator.clipboard) {
+                                    navigator.clipboard.writeText(src.text);
+                                  }
+                                  setCopiedIdx(idx);
+                                  setTimeout(() => setCopiedIdx(null), 2000);
+                                }}
+                              >
+                                {isCopied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
+                                <span>{isCopied ? 'Copied' : 'Copy passage'}</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            </div>
           )}
 
         </div>
@@ -1774,8 +1947,11 @@ function PlotlyChart({ figure }) {
     if (containerRef.current && window.Plotly && figure) {
       try {
         const parsedFigure = typeof figure === 'string' ? JSON.parse(figure) : figure;
+        const cleanLayout = { ...(parsedFigure.layout || {}) };
+        delete cleanLayout.width;
+
         const layout = {
-          ...parsedFigure.layout,
+          ...cleanLayout,
           autosize: true,
           margin: { l: 45, r: 25, t: 40, b: 45 },
           paper_bgcolor: '#ffffff',
@@ -1788,7 +1964,27 @@ function PlotlyChart({ figure }) {
           parsedFigure.data,
           layout,
           { responsive: true, displayModeBar: true, displaylogo: false }
-        );
+        ).then(() => {
+          if (window.Plotly && containerRef.current) {
+            window.Plotly.Plots.resize(containerRef.current);
+          }
+        });
+
+        const handleResize = () => {
+          if (window.Plotly && containerRef.current) {
+            window.Plotly.Plots.resize(containerRef.current);
+          }
+        };
+
+        window.addEventListener('resize', handleResize);
+        const t1 = setTimeout(handleResize, 50);
+        const t2 = setTimeout(handleResize, 200);
+
+        return () => {
+          window.removeEventListener('resize', handleResize);
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
       } catch (err) {
         console.error("Error rendering Plotly chart:", err);
       }
@@ -1796,8 +1992,8 @@ function PlotlyChart({ figure }) {
   }, [figure]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', background: '#ffffff', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.1)', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.04)' }}>
-      <div ref={containerRef} style={{ width: '100%', height: '380px' }} />
+    <div style={{ position: 'relative', width: '100%', background: '#ffffff', borderRadius: '12px', border: '1px solid rgba(0,0,0,0.1)', padding: '16px', boxShadow: '0 4px 12px rgba(0,0,0,0.04)' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '420px' }} />
       <button
         onClick={() => {
           if (window.Plotly && containerRef.current) {
