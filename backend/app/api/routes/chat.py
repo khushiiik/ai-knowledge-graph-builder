@@ -129,6 +129,22 @@ def ask_question(
     ).all()
 
     intent = classify_intent(payload.question)
+
+    if not docs and intent != "greeting":
+        def no_docs_stream():
+            yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"
+            reply = "No active documents found in your knowledge base. Please upload a document (PDF, CSV, TXT, etc.) first so I can process and map out your knowledge graph."
+            yield f"data: {json.dumps({'token': reply})}\n\n"
+            
+            session = SessionLocal()
+            try:
+                session.add(Message(conversation_id=conversation_id, role=MessageRole.ASSISTANT.value, content=reply))
+                session.commit()
+            finally:
+                session.close()
+            yield "event: done\ndata: {}\n\n"
+
+        return StreamingResponse(no_docs_stream(), media_type="text/event-stream")
     if intent != "knowledge_query":
         def simple_stream():
             yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id_str})}\n\n"

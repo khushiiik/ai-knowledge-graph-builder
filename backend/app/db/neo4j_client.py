@@ -86,6 +86,24 @@ def query_related_facts(user_id: int, entity_names: List[str], limit: int = 8) -
         return [dict(record) for record in result]
 
 
+def query_all_user_facts(user_id: int, limit: int = 40) -> List[Dict]:
+    """
+    Retrieves all entity relationships for a user's knowledge graph.
+    """
+    driver = get_neo4j_driver()
+    with driver.session() as session:
+        result = session.run(
+            """
+            MATCH (a:Entity {userId: $user_id})-[r:RELATES_TO {userId: $user_id}]->(b:Entity {userId: $user_id})
+            RETURN a.name AS source, r.type AS relation, b.name AS target, r.sourceDocument AS source_doc
+            LIMIT $limit
+            """,
+            user_id=user_id,
+            limit=limit,
+        )
+        return [dict(record) for record in result]
+
+
 def query_document_facts(user_id: int, source_file: str, limit: int = 10) -> List[Dict]:
     """
     Retrieves relationships extracted from a specific document for a user.

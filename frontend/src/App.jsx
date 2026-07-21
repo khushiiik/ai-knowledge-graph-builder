@@ -598,28 +598,13 @@ export default function App() {
 
   // Create new conversation
   const createNewConversation = () => {
-    // Check if the current conversation is empty
-    const activeConv = conversations.find(c => c.id === activeConversationId);
-    if (activeConv && activeConv.messages.length <= 1) {
-      return;
-    }
-
-    // Check if there is any other empty conversation to redirect to
-    const emptyConv = conversations.find(c => c.messages.length <= 1);
-    if (emptyConv) {
-      setActiveConversationId(emptyConv.id);
-      return;
-    }
-
     const newId = `conv-${Date.now()}`;
     const newConv = {
       id: newId,
       title: "New chat",
-      messages: [
-        { sender: "assistant", text: "Hello! Started a new session. Upload files or ask me anything." }
-      ]
+      messages: []
     };
-    setConversations([newConv, ...conversations]);
+    setConversations(prev => [newConv, ...prev]);
     setActiveConversationId(newId);
   };
 
@@ -690,11 +675,12 @@ export default function App() {
   };
 
   // Handle Send Message (Actual SSE Streaming)
-  const handleSendMessage = async (e) => {
+  const handleSendMessage = async (e, overrideQuery = null) => {
     if (e) e.preventDefault();
-    if (!inputVal.trim() || isLlmGenerating || !authToken) return;
+    const queryToSend = overrideQuery || inputVal;
+    if (!queryToSend.trim() || isLlmGenerating || !authToken) return;
 
-    const userMsg = { sender: "user", text: inputVal };
+    const userMsg = { sender: "user", text: queryToSend };
     const currentMessages = [...activeConversation.messages, userMsg];
 
     // Add user message locally
@@ -708,7 +694,7 @@ export default function App() {
       return c;
     }));
 
-    const question = inputVal;
+    const question = queryToSend;
     setInputVal("");
     setIsLlmGenerating(true);
 
@@ -1385,7 +1371,7 @@ export default function App() {
 
                   {/* Graph Card */}
                   <div className="glass-card" onClick={() => {
-                    setInputVal("Generate a relational schema map from all active knowledge base documents.");
+                    handleSendMessage(null, "Generate a relational schema map from all active knowledge base documents.");
                   }} style={{ minHeight: '180px' }}>
                     <div>
                       <div className="card-icon">
