@@ -129,6 +129,7 @@ body {
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   z-index: 15;
+  flex-shrink: 0;
 }
 
 .sidebar.expanded {
@@ -144,8 +145,9 @@ body {
   gap: 20px;
   width: 100%;
   flex-grow: 1;
-  overflow: hidden;
-  height: calc(100% - 110px);
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar.expanded .sidebar-top {
@@ -158,6 +160,9 @@ body {
   justify-content: center;
   width: 44px;
   height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
   border-radius: 12px;
   background: var(--black-magic);
   color: white;
@@ -170,6 +175,7 @@ body {
   align-items: center;
   gap: 12px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .sidebar-title {
@@ -185,6 +191,7 @@ body {
   gap: 16px;
   width: 100%;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .sidebar.expanded .sidebar-nav {
@@ -194,6 +201,9 @@ body {
 .nav-item {
   width: 44px;
   height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
   border-radius: 12px;
   border: none;
   background: var(--black-magic);
@@ -220,6 +230,7 @@ body {
   font-size: 0.95rem;
   font-weight: 500;
 }
+
 
 /* Chat List when Sidebar is Expanded */
 .chat-list-container {
@@ -873,8 +884,10 @@ body {
   border-top: 1px solid var(--glass-border);
   display: flex;
   flex-direction: column;
-  position: relative; /* Anchor for absolute popover positioning */
+  position: relative;
+  flex-shrink: 0;
 }
+
 
 .sidebar-profile-card {
   display: flex;
