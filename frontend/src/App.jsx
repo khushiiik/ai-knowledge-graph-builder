@@ -65,6 +65,9 @@ export default function App() {
   const [authToken, setAuthToken] = useState(() => {
     return localStorage.getItem('vectra_auth_token');
   });
+  const [refreshToken, setRefreshToken] = useState(() => {
+    return localStorage.getItem('vectra_refresh_token');
+  });
   const [loginUser, setLoginUser] = useState(() => {
     const saved = localStorage.getItem('vectra_login_user');
     if (saved) {
@@ -163,6 +166,101 @@ export default function App() {
     }
   }, [authToken]);
 
+  useEffect(() => {
+    if (refreshToken) {
+      localStorage.setItem('vectra_refresh_token', refreshToken);
+    } else {
+      localStorage.removeItem('vectra_refresh_token');
+    }
+  }, [refreshToken]);
+
+  // Automatic token refresh function
+  const tryRefreshToken = async () => {
+    const currentRefresh = localStorage.getItem('vectra_refresh_token') || refreshToken;
+    if (!currentRefresh) {
+      handleLogout();
+      return null;
+    }
+    try {
+      const res = await fetch('/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: currentRefresh })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.access_token) {
+          setAuthToken(data.access_token);
+          localStorage.setItem('vectra_auth_token', data.access_token);
+          if (data.refresh_token) {
+            setRefreshToken(data.refresh_token);
+            localStorage.setItem('vectra_refresh_token', data.refresh_token);
+          }
+          return data.access_token;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to auto-refresh access token:', err);
+    }
+    handleLogout();
+    return null;
+  };
+
+  // Authenticated fetch wrapper with seamless 401 retry & auto-refresh
+  const fetchWithAuth = async (url, options = {}) => {
+    let currentToken = localStorage.getItem('vectra_auth_token') || authToken;
+    if (!currentToken) return null;
+
+    const reqHeaders = {
+      ...(options.headers || {}),
+      'Authorization': `Bearer ${currentToken}`
+    };
+
+    let res = await fetch(url, { ...options, headers: reqHeaders });
+    if (res.status === 401) {
+      const newToken = await tryRefreshToken();
+      if (newToken) {
+        const retryHeaders = {
+          ...(options.headers || {}),
+          'Authorization': `Bearer ${newToken}`
+        };
+        res = await fetch(url, { ...options, headers: retryHeaders });
+      }
+    }
+    return res;
+  };
+
+  // Background timer to check token expiration and silently refresh before token expires
+  useEffect(() => {
+    if (!authToken) return;
+
+    const checkAndAutoRefresh = async () => {
+      try {
+        const currentTok = localStorage.getItem('vectra_auth_token') || authToken;
+        if (!currentTok) return;
+        const parts = currentTok.split('.');
+        if (parts.length !== 3) return;
+        const payloadBase64 = parts[1];
+        const decodedJson = atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/'));
+        const decoded = JSON.parse(decodedJson);
+        if (decoded.exp) {
+          const expiresAtMs = decoded.exp * 1000;
+          const timeRemainingMs = expiresAtMs - Date.now();
+          // If token expires in less than 5 minutes, silently refresh
+          if (timeRemainingMs < 5 * 60 * 1000) {
+            await tryRefreshToken();
+          }
+        }
+      } catch (err) {
+        // Silently ignore decode errors
+      }
+    };
+
+    checkAndAutoRefresh();
+    const interval = setInterval(checkAndAutoRefresh, 2 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [authToken, refreshToken]);
+
   // Persist user profiles
   useEffect(() => {
     if (loginUser) {
@@ -181,13 +279,8 @@ export default function App() {
   const fetchConversations = async () => {
     if (!authToken) return;
     try {
-      const res = await fetch('/chat/conversations', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      const res = await fetchWithAuth('/chat/conversations');
+      if (!res || res.status === 401) return;
       if (res.ok) {
         const data = await res.json();
         const mapped = data.map(c => ({
@@ -197,18 +290,15 @@ export default function App() {
         }));
 
         setConversations(prev => {
-          // Keep unsaved conversations (starting with conv-)
           const unsaved = prev.filter(c => c.id.startsWith("conv-"));
           const combined = [...unsaved];
 
-          // Add database conversations, avoiding duplicates
           mapped.forEach(mc => {
             if (!combined.some(c => c.id === mc.id)) {
               combined.push(mc);
             }
           });
 
-          // Restore active conversation ID
           const savedActiveId = localStorage.getItem('vectra_active_conversation_id');
           if (savedActiveId && combined.some(c => c.id === savedActiveId)) {
             setActiveConversationId(savedActiveId);
@@ -228,13 +318,8 @@ export default function App() {
   const fetchConversationMessages = async (convId) => {
     if (!authToken || !convId || convId.startsWith("conv-")) return;
     try {
-      const res = await fetch(`/chat/conversations/${convId}/messages`, {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      const res = await fetchWithAuth(`/chat/conversations/${convId}/messages`);
+      if (!res || res.status === 401) return;
       if (res.ok) {
         const data = await res.json();
         const mappedMsgs = data.map(m => {
@@ -274,13 +359,8 @@ export default function App() {
   const fetchDocuments = async () => {
     if (!authToken) return;
     try {
-      const res = await fetch('/documents', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
-      });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      const res = await fetchWithAuth('/documents');
+      if (!res || res.status === 401) return;
       if (res.ok) {
         const data = await res.json();
         const mapped = data.map(doc => ({
@@ -431,6 +511,10 @@ export default function App() {
         email: email
       });
       setAuthToken(data.access_token);
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token);
+        localStorage.setItem('vectra_refresh_token', data.refresh_token);
+      }
     } catch (err) {
       setAuthError(err.message);
     }
@@ -478,6 +562,10 @@ export default function App() {
         email: email
       });
       setAuthToken(data.access_token);
+      if (data.refresh_token) {
+        setRefreshToken(data.refresh_token);
+        localStorage.setItem('vectra_refresh_token', data.refresh_token);
+      }
     } catch (err) {
       setAuthError(err.message);
     }
@@ -486,6 +574,7 @@ export default function App() {
   // Handle Logout
   const handleLogout = () => {
     setAuthToken(null);
+    setRefreshToken(null);
     setLoginUser(null);
     setEmail('');
     setPassword('');
@@ -501,6 +590,7 @@ export default function App() {
     ]);
     setActiveConversationId("conv-1");
     localStorage.removeItem('vectra_auth_token');
+    localStorage.removeItem('vectra_refresh_token');
     localStorage.removeItem('vectra_login_user');
     localStorage.removeItem('vectra_conversations');
     localStorage.removeItem('vectra_active_conversation_id');
@@ -539,16 +629,10 @@ export default function App() {
     if (confirm("Are you sure you want to delete this conversation?")) {
       if (!convId.startsWith("conv-") && authToken) {
         try {
-          const res = await fetch(`/chat/conversations/${convId}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${authToken}`
-            }
+          const res = await fetchWithAuth(`/chat/conversations/${convId}`, {
+            method: 'DELETE'
           });
-          if (res.status === 401) {
-            handleLogout();
-            return;
-          }
+          if (!res || res.status === 401) return;
           if (!res.ok) {
             throw new Error('Failed to delete conversation.');
           }
@@ -575,15 +659,8 @@ export default function App() {
   const handleDownloadFile = async (downloadUrl, filename) => {
     try {
       const targetUrl = downloadUrl.startsWith('http') ? downloadUrl : downloadUrl;
-      const res = await fetch(targetUrl, {
-        headers: {
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      const res = await fetchWithAuth(targetUrl);
+      if (!res || res.status === 401) return;
       if (!res.ok) {
         window.open(`${targetUrl}?token=${encodeURIComponent(authToken)}`, '_blank');
         return;
@@ -648,11 +725,10 @@ export default function App() {
     }));
 
     try {
-      const res = await fetch('/chat/ask', {
+      const res = await fetchWithAuth('/chat/ask', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           question,
@@ -661,10 +737,7 @@ export default function App() {
             : activeConversationId
         })
       });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      if (!res || res.status === 401) return;
       if (!res.ok) {
         throw new Error('Query error. Is Ollama or the backend offline?');
       }
@@ -821,13 +894,11 @@ export default function App() {
         const formData = new FormData();
         formData.append('file', file);
 
-        const res = await fetch('/documents/upload', {
+        const res = await fetchWithAuth('/documents/upload', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${authToken}` },
           body: formData
         });
-        if (res.status === 401) {
-          handleLogout();
+        if (!res || res.status === 401) {
           throw new Error("Unauthorized");
         }
         if (!res.ok) {
@@ -849,14 +920,10 @@ export default function App() {
   const handleDeleteDocument = async (docId) => {
     if (!authToken) return;
     try {
-      const res = await fetch(`/documents/${docId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${authToken}` }
+      const res = await fetchWithAuth(`/documents/${docId}`, {
+        method: 'DELETE'
       });
-      if (res.status === 401) {
-        handleLogout();
-        return;
-      }
+      if (!res || res.status === 401) return;
       if (res.ok) {
         setDocuments(prev => prev.filter(doc => doc.id !== docId));
       } else {

@@ -21,7 +21,11 @@ class UserRead(UserBase):
 
 class Token(BaseModel):
     access_token: str
-    token_type: str
+    refresh_token: str | None = None
+    token_type: str = "bearer"
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 class TokenData(BaseModel):
     email: str | None = None
