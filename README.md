@@ -185,5 +185,5 @@ This project is built and maintained solely for **educational, study, and learni
 
 ---
 
-### Prepared By
-**Kush** *(Senior Software Engineer)*
+### Developed By
+**Khushi Koriya**
