@@ -326,7 +326,15 @@ export default function App() {
           const chartSource = m.sources ? m.sources.find(s => s.type === 'chart') : null;
           const downloadSource = m.sources ? m.sources.find(s => s.type === 'download') : null;
           const timelineSource = m.sources ? m.sources.find(s => s.type === 'timeline') : null;
-          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.type !== 'timeline') : null;
+          const comparisonSource = m.sources ? m.sources.find(s => s.type === 'comparison') : null;
+          const graphSource = m.sources ? m.sources.find(s => s.type === 'graph') : null;
+          const citations = m.sources ? m.sources.filter(s => 
+            s.type !== 'chart' && 
+            s.type !== 'download' && 
+            s.type !== 'timeline' && 
+            s.type !== 'comparison' &&
+            s.type !== 'graph'
+          ) : null;
           return {
             sender: m.role,
             text: m.content,
@@ -334,7 +342,9 @@ export default function App() {
             chartFigure: chartSource ? chartSource.figure : null,
             downloadUrl: downloadSource ? downloadSource.downloadUrl : null,
             downloadFilename: downloadSource ? downloadSource.downloadFilename : null,
-            timelineEvents: timelineSource ? timelineSource.events : null
+            timelineEvents: timelineSource ? timelineSource.events : null,
+            comparisonData: comparisonSource ? comparisonSource.comparison_data : null,
+            graphData: graphSource ? graphSource.graph_data : null
           };
         });
 
@@ -846,6 +856,25 @@ export default function App() {
                         msgs[msgs.length - 1] = {
                           ...msgs[msgs.length - 1],
                           comparisonData: compData
+                        };
+                      }
+                      return { ...c, messages: msgs };
+                    }
+                    return c;
+                  }));
+                }
+              }
+
+              if (payload.graph_data !== undefined || currentEvent === 'graph') {
+                const graphData = payload.graph_data || payload.graphData;
+                if (graphData) {
+                  setConversations(prev => prev.map(c => {
+                    if (c.id === currentConvId) {
+                      const msgs = [...c.messages];
+                      if (msgs.length > 0) {
+                        msgs[msgs.length - 1] = {
+                          ...msgs[msgs.length - 1],
+                          graphData: graphData
                         };
                       }
                       return { ...c, messages: msgs };
@@ -1455,13 +1484,13 @@ export default function App() {
                 {activeConversation.messages.map((msg, i) => (
                   <div
                     key={i}
-                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure || msg.timelineEvents || msg.comparisonData ? 'has-chart' : ''}`}
+                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure || msg.timelineEvents || msg.comparisonData || msg.graphData ? 'has-chart' : ''}`}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
-                      width: msg.chartFigure || msg.timelineEvents || msg.comparisonData ? '100%' : undefined,
-                      maxWidth: msg.chartFigure || msg.timelineEvents || msg.comparisonData ? '100%' : undefined
+                      width: msg.chartFigure || msg.timelineEvents || msg.comparisonData || msg.graphData ? '100%' : undefined,
+                      maxWidth: msg.chartFigure || msg.timelineEvents || msg.comparisonData || msg.graphData ? '100%' : undefined
                     }}
                   >
                     <div>{renderMessageText(cleanMessageText(msg.text))}</div>
@@ -1562,6 +1591,11 @@ export default function App() {
                     {msg.comparisonData && (
                       <div className="comparison-container" style={{ marginTop: '12px', width: '100%' }}>
                         <ComparisonVisualization data={msg.comparisonData} />
+                      </div>
+                    )}
+                    {msg.graphData && (
+                      <div className="graph-container" style={{ marginTop: '12px', width: '100%' }}>
+                        <GraphVisualization data={msg.graphData} />
                       </div>
                     )}
                     {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text)).length > 0 && (
@@ -2349,6 +2383,98 @@ function ComparisonVisualization({ data }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function GraphVisualization({ data }) {
+  const containerRef = useRef(null);
+  const cyRef = useRef(null);
+
+  useEffect(() => {
+    if (containerRef.current && window.cytoscape && data && data.elements && data.elements.length > 0) {
+      try {
+        containerRef.current.innerHTML = '';
+        cyRef.current = window.cytoscape({
+          container: containerRef.current,
+          elements: data.elements,
+          style: [
+            {
+              selector: 'node',
+              style: {
+                'background-color': '#6366f1',
+                'label': 'data(label)',
+                'color': '#1e293b',
+                'font-size': '11px',
+                'font-family': 'Outfit, sans-serif',
+                'font-weight': '600',
+                'text-valign': 'center',
+                'text-halign': 'right',
+                'text-margin-x': 6,
+                'width': 24,
+                'height': 24,
+                'border-width': 2,
+                'border-color': '#ffffff',
+                'overlay-padding': '4px',
+                'overlay-color': '#6366f1',
+                'overlay-opacity': 0.15
+              }
+            },
+            {
+              selector: 'edge',
+              style: {
+                'width': 1.5,
+                'line-color': '#cbd5e1',
+                'target-arrow-color': '#94a3b8',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier',
+                'label': 'data(label)',
+                'font-size': '8px',
+                'font-family': 'Outfit, sans-serif',
+                'color': '#475569',
+                'text-rotation': 'autorotate',
+                'text-margin-y': -8
+              }
+            }
+          ],
+          layout: {
+            name: 'cose',
+            animate: true,
+            fit: true,
+            padding: 30,
+            nodeRepulsion: 400000,
+            idealEdgeLength: 100
+          }
+        });
+
+        return () => {
+          if (cyRef.current) {
+            cyRef.current.destroy();
+          }
+        };
+      } catch (err) {
+        console.error("Error creating Cytoscape.js graph:", err);
+      }
+    }
+  }, [data]);
+
+  if (!data || !data.elements || data.elements.length === 0) {
+    return <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No graph data available</div>;
+  }
+
+  return (
+    <div className="graph-visualization-container">
+      <div className="graph-header-row">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="graph-header-icon">
+          <circle cx="18" cy="5" r="3"></circle>
+          <circle cx="6" cy="12" r="3"></circle>
+          <circle cx="18" cy="19" r="3"></circle>
+          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+        </svg>
+        <h4 className="graph-title">Knowledge Graph View</h4>
+      </div>
+      <div ref={containerRef} className="cytoscape-wrapper" />
     </div>
   );
 }

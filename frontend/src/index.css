@@ -1692,5 +1692,44 @@ div.vis-tooltip {
   text-align: center;
 }
 
+/* Graph Visualization */
+.graph-visualization-container {
+  margin: 16px 0 16px 44px;
+  background: rgba(255, 255, 255, 0.45);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+  backdrop-filter: blur(10px);
+}
+
+.graph-header-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.graph-header-icon {
+  color: var(--accent-color);
+}
+
+.graph-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--black-magic);
+  font-family: 'Outfit', sans-serif;
+}
+
+.cytoscape-wrapper {
+  width: 100%;
+  height: 350px;
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
 
 

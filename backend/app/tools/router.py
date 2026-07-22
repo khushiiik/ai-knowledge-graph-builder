@@ -16,6 +16,7 @@ from app.tools.chart_generator import ChartGenerator
 from app.tools.spreadsheet_tool import execute_pandas_query
 from app.tools.timeline_tool import execute_timeline_extraction
 from app.tools.comparison_tool import execute_comparison_extraction
+from app.tools.graph_tool import execute_graph_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +308,17 @@ class ToolRouter:
                 query=query
             )
             return {"comparison_data": data}
+
+        elif tool_name == "graph_generator":
+            document_id_str = arguments.get("document_id")
+            query = arguments.get("query", "graph")
+            data = execute_graph_extraction(
+                db=db,
+                user_id=user_id,
+                document_id_str=document_id_str,
+                query=query
+            )
+            return {"graph_data": data}
 
         else:
             raise ValueError(f"Unknown tool: {tool_name}")

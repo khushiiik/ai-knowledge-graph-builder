@@ -580,6 +580,13 @@ def ask_question(
                             synthesized_reply = reply
                             yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
                             yield f"event: comparison\ndata: {json.dumps({'comparison_data': comp_data})}\n\n"
+                    elif tool_name == "graph_generator":
+                        graph_data = result.get("graph_data", {})
+                        elements_cnt = len(graph_data.get("elements", []))
+                        reply = f"I have successfully generated a knowledge graph visualization with {elements_cnt} element(s)."
+                        synthesized_reply = reply
+                        yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
+                        yield f"event: graph\ndata: {json.dumps({'graph_data': graph_data})}\n\n"
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     tool_error = str(e)
@@ -594,6 +601,9 @@ def ask_question(
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                     elif tool_name == "comparison_generator":
                         synthesized_reply = f"Failed to generate comparison table: {str(e)}"
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
+                    elif tool_name == "graph_generator":
+                        synthesized_reply = f"Failed to generate knowledge graph: {str(e)}"
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                 finally:
                     db_session.close()
@@ -631,6 +641,14 @@ def ask_question(
                             "type": "comparison",
                             "comparison_data": comp_data
                         })
+                elif tool_name == "graph_generator" and 'graph_data' in locals() and graph_data:
+                    content_to_save = f"Generated knowledge graph with {len(graph_data.get('elements', []))} elements."
+                    if not source_data:
+                        source_data = []
+                    source_data.append({
+                        "type": "graph",
+                        "graph_data": graph_data
+                    })
                 elif tool_name in ("spreadsheet_query", "spreadsheet_export") and synthesized_reply:
                     content_to_save = synthesized_reply
                     if tool_name == "spreadsheet_export" and 'result' in locals() and isinstance(result, dict) and result.get("download_url"):
