@@ -15,6 +15,7 @@ from app.retrieval.semantic_search import retrieve_chunks, build_context_block
 from app.tools.chart_generator import ChartGenerator
 from app.tools.spreadsheet_tool import execute_pandas_query
 from app.tools.timeline_tool import execute_timeline_extraction
+from app.tools.comparison_tool import execute_comparison_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +296,17 @@ class ToolRouter:
                 query=query
             )
             return {"events": events}
+
+        elif tool_name == "comparison_generator":
+            document_id_str = arguments.get("document_id")
+            query = arguments.get("query", "compare")
+            data = execute_comparison_extraction(
+                db=db,
+                user_id=user_id,
+                document_id_str=document_id_str,
+                query=query
+            )
+            return {"comparison_data": data}
 
         else:
             raise ValueError(f"Unknown tool: {tool_name}")

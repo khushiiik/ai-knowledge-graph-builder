@@ -85,6 +85,40 @@ def _get_or_create_conversation(db: Session, user: UserModel, conversation_id: O
     return conversation
 
 
+def fuzzy_replace(text: str, target: str, replacement: str) -> str:
+    import difflib
+    # Try exact case-insensitive replacement first
+    pattern = re.compile(re.escape(target), re.IGNORECASE)
+    if pattern.search(text):
+        return pattern.sub(replacement, text)
+        
+    # Slide a window to find the closest match for the target
+    target_words = [w for w in target.split() if len(w) > 1]
+    if not target_words:
+        return text
+        
+    text_words = text.split()
+    best_ratio = 0.0
+    best_start = -1
+    best_end = -1
+    
+    n_target = len(target_words)
+    for w_size in range(max(1, n_target - 2), n_target + 3):
+        for i in range(len(text_words) - w_size + 1):
+            window_str = " ".join(text_words[i:i+w_size])
+            ratio = difflib.SequenceMatcher(None, target.lower(), window_str.lower()).ratio()
+            if ratio > best_ratio and ratio > 0.5:
+                best_ratio = ratio
+                best_start = i
+                best_end = i + w_size
+                
+    if best_start != -1:
+        replaced = text_words[:best_start] + [replacement] + text_words[best_end:]
+        return " ".join(replaced)
+        
+    return text
+
+
 @router.post("/ask")
 def ask_question(
     payload: AskRequest,
@@ -102,6 +136,40 @@ def ask_question(
     )
     db_messages.reverse()
     history = [("human" if msg.role == "user" else "ai", msg.content) for msg in db_messages]
+
+    # Check if user says "yes" agreeing to a suggestion
+    question_clean = payload.question.lower().strip().rstrip(".!?")
+    is_agreement = question_clean in ("yes", "y", "yeah", "yep", "sure", "correct", "agree", "okay", "ok", "yes please")
+    
+    if is_agreement and history:
+        # Find the last assistant message
+        last_assistant_msg = None
+        for role, text in reversed(history):
+            if role == "ai" or role == "assistant":
+                last_assistant_msg = text
+                break
+        
+        if last_assistant_msg:
+            # Pattern: "xyz" is not available. Did you mean "abc"?
+            # Match both terms in double quotes
+            matches = re.findall(r'"([^"]+)"', last_assistant_msg)
+            if len(matches) >= 2:
+                missing_term = matches[0]
+                suggested_term = matches[1]
+                
+                # Find the last user query in history
+                last_user_query = None
+                for role, text in reversed(history):
+                    if role == "human" or role == "user":
+                        tc = text.lower().strip().rstrip(".!?")
+                        if tc not in ("yes", "y", "yeah", "yep", "sure", "correct", "agree", "okay", "ok", "yes please"):
+                            last_user_query = text
+                            break
+                
+                if last_user_query:
+                    corrected_query = fuzzy_replace(last_user_query, missing_term, suggested_term)
+                    logger.info(f"User agreed to suggestion. Corrected query from '{last_user_query}' to '{corrected_query}'")
+                    payload.question = corrected_query
 
     db.add(Message(conversation_id=conversation.id, role=MessageRole.USER.value, content=payload.question))
     
@@ -432,6 +500,9 @@ def ask_question(
                 full_answer += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception as exc:
+            logger.error(f"LLM streaming exception: {exc}")
+            err_msg = f"\n\n**Error:** {str(exc)}"
+            yield f"data: {json.dumps({'token': err_msg})}\n\n"
             yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
             return
 
@@ -497,6 +568,18 @@ def ask_question(
                         synthesized_reply = reply
                         yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
                         yield f"event: timeline\ndata: {json.dumps({'events': timeline_events})}\n\n"
+                    elif tool_name == "comparison_generator":
+                        comp_data = result.get("comparison_data", {})
+                        if "warning" in comp_data:
+                            warning_msg = comp_data["warning"]
+                            synthesized_reply = warning_msg
+                            yield f"data: {json.dumps({'token': f'\\n\\n{warning_msg}'})}\n\n"
+                        else:
+                            rows_cnt = len(comp_data.get("rows", []))
+                            reply = f"I have successfully generated a side-by-side comparison table with {rows_cnt} feature(s) compared."
+                            synthesized_reply = reply
+                            yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
+                            yield f"event: comparison\ndata: {json.dumps({'comparison_data': comp_data})}\n\n"
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     tool_error = str(e)
@@ -508,6 +591,9 @@ def ask_question(
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                     elif tool_name == "timeline_generator":
                         synthesized_reply = f"Failed to generate timeline: {str(e)}"
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
+                    elif tool_name == "comparison_generator":
+                        synthesized_reply = f"Failed to generate comparison table: {str(e)}"
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                 finally:
                     db_session.close()
@@ -534,6 +620,17 @@ def ask_question(
                         "type": "timeline",
                         "events": timeline_events
                     })
+                elif tool_name == "comparison_generator" and 'comp_data' in locals() and comp_data:
+                    if "warning" in comp_data:
+                        content_to_save = comp_data["warning"]
+                    else:
+                        content_to_save = f"Generated comparison table with {len(comp_data.get('rows', []))} rows."
+                        if not source_data:
+                            source_data = []
+                        source_data.append({
+                            "type": "comparison",
+                            "comparison_data": comp_data
+                        })
                 elif tool_name in ("spreadsheet_query", "spreadsheet_export") and synthesized_reply:
                     content_to_save = synthesized_reply
                     if tool_name == "spreadsheet_export" and 'result' in locals() and isinstance(result, dict) and result.get("download_url"):

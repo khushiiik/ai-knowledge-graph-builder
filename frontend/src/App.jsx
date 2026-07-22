@@ -836,6 +836,25 @@ export default function App() {
                 }
               }
 
+              if (payload.comparison_data !== undefined || currentEvent === 'comparison') {
+                const compData = payload.comparison_data || payload.comparisonData;
+                if (compData) {
+                  setConversations(prev => prev.map(c => {
+                    if (c.id === currentConvId) {
+                      const msgs = [...c.messages];
+                      if (msgs.length > 0) {
+                        msgs[msgs.length - 1] = {
+                          ...msgs[msgs.length - 1],
+                          comparisonData: compData
+                        };
+                      }
+                      return { ...c, messages: msgs };
+                    }
+                    return c;
+                  }));
+                }
+              }
+
               if (payload.downloadUrl !== undefined || currentEvent === 'download') {
                 const dUrl = payload.downloadUrl || payload.download_url;
                 const dFilename = payload.downloadFilename || payload.download_filename || payload.filename;
@@ -1436,13 +1455,13 @@ export default function App() {
                 {activeConversation.messages.map((msg, i) => (
                   <div
                     key={i}
-                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure || msg.timelineEvents ? 'has-chart' : ''}`}
+                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure || msg.timelineEvents || msg.comparisonData ? 'has-chart' : ''}`}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
-                      width: msg.chartFigure || msg.timelineEvents ? '100%' : undefined,
-                      maxWidth: msg.chartFigure || msg.timelineEvents ? '100%' : undefined
+                      width: msg.chartFigure || msg.timelineEvents || msg.comparisonData ? '100%' : undefined,
+                      maxWidth: msg.chartFigure || msg.timelineEvents || msg.comparisonData ? '100%' : undefined
                     }}
                   >
                     <div>{renderMessageText(cleanMessageText(msg.text))}</div>
@@ -1538,6 +1557,11 @@ export default function App() {
                     {msg.timelineEvents && (
                       <div className="timeline-container" style={{ marginTop: '12px', width: '100%' }}>
                         <TimelineVisualization events={msg.timelineEvents} />
+                      </div>
+                    )}
+                    {msg.comparisonData && (
+                      <div className="comparison-container" style={{ marginTop: '12px', width: '100%' }}>
+                        <ComparisonVisualization data={msg.comparisonData} />
                       </div>
                     )}
                     {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text)).length > 0 && (
@@ -2279,6 +2303,52 @@ function TimelineVisualization({ events }) {
     <div className="timeline-visualization-container">
       <h4 className="timeline-header">Visual Timeline</h4>
       <div ref={containerRef} className="vis-timeline-wrapper" />
+    </div>
+  );
+}
+
+function ComparisonVisualization({ data }) {
+  if (!data || !data.headers || !data.rows || data.rows.length === 0) {
+    return <div style={{ padding: '16px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>No comparison data available</div>;
+  }
+
+  const { headers, rows } = data;
+
+  return (
+    <div className="comparison-visualization-container">
+      <div className="comparison-header-row">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="comparison-header-icon">
+          <path d="M16 3h5v5"></path>
+          <path d="M8 21H3v-5"></path>
+          <path d="m21 3-7.5 7.5"></path>
+          <path d="m3 21 7.5-7.5"></path>
+        </svg>
+        <h4 className="comparison-title">Comparison Matrix</h4>
+      </div>
+      <div className="comparison-table-wrapper">
+        <table className="comparison-table">
+          <thead>
+            <tr>
+              {headers.map((h, i) => (
+                <th key={i} className={i === 0 ? "feature-header" : "entity-header"}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rIdx) => (
+              <tr key={rIdx}>
+                {headers.map((h, cIdx) => (
+                  <td key={cIdx} className={cIdx === 0 ? "feature-cell" : "value-cell"}>
+                    {row[h] || "N/A"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
