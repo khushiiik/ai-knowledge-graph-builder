@@ -491,6 +491,12 @@ def ask_question(
                         synthesized_reply = reply
                         yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
                         yield f"event: download\ndata: {json.dumps({'downloadUrl': download_url, 'downloadFilename': download_filename})}\n\n"
+                    elif tool_name == "timeline_generator":
+                        timeline_events = result.get("events", [])
+                        reply = f"I have successfully generated a timeline with {len(timeline_events)} event(s) from the document."
+                        synthesized_reply = reply
+                        yield f"data: {json.dumps({'token': f'\\n\\n{synthesized_reply}'})}\n\n"
+                        yield f"event: timeline\ndata: {json.dumps({'events': timeline_events})}\n\n"
                 except Exception as e:
                     logger.error(f"Error executing tool {tool_name}: {str(e)}")
                     tool_error = str(e)
@@ -499,6 +505,9 @@ def ask_question(
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                     elif tool_name == "spreadsheet_export":
                         synthesized_reply = f"Failed to execute spreadsheet export: {str(e)}"
+                        yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
+                    elif tool_name == "timeline_generator":
+                        synthesized_reply = f"Failed to generate timeline: {str(e)}"
                         yield f"data: {json.dumps({'token': f'\\n\\n**Error:**\\n{synthesized_reply}'})}\n\n"
                 finally:
                     db_session.close()
@@ -517,6 +526,14 @@ def ask_question(
                         "type": "chart",
                         "figure": tool_figure
                     })
+                elif tool_name == "timeline_generator" and 'timeline_events' in locals() and timeline_events:
+                    content_to_save = f"Generated timeline with {len(timeline_events)} events."
+                    if not source_data:
+                        source_data = []
+                    source_data.append({
+                        "type": "timeline",
+                        "events": timeline_events
+                    })
                 elif tool_name in ("spreadsheet_query", "spreadsheet_export") and synthesized_reply:
                     content_to_save = synthesized_reply
                     if tool_name == "spreadsheet_export" and 'result' in locals() and isinstance(result, dict) and result.get("download_url"):
@@ -530,7 +547,7 @@ def ask_question(
 
                 else:
                     content_to_save = f"Failed to execute tool '{tool_name}': {tool_error}"
-                    if tool_name not in ("spreadsheet_query", "spreadsheet_export"):
+                    if tool_name not in ("spreadsheet_query", "spreadsheet_export", "timeline_generator"):
                         yield f"data: {json.dumps({'token': f'\\n*Error: {content_to_save}*'})}\n\n"
             else:
                 content_to_save = full_answer

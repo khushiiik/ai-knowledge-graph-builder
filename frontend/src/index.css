@@ -1435,3 +1435,165 @@ body {
   color: var(--black-magic);
 }
 
+/* Vis.js Timeline Custom Theme overrides */
+.timeline-visualization-container {
+  margin-top: 16px;
+  width: 90%;
+  margin-left: 60px; /* Leave scrolling gap/gutter on the left side of the screen */
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid rgba(0,0,0,0.08);
+  padding: 20px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.04);
+}
+
+.timeline-header {
+  margin: 0 0 16px 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--black-magic, #0f172a);
+  font-family: 'Outfit', sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.vis-timeline-wrapper {
+  border-radius: 12px;
+  overflow: visible;
+  border: 1px solid rgba(0,0,0,0.06);
+  background: #ffffff;
+}
+
+/* vis.js library overrides */
+.vis-timeline {
+  border: none !important;
+  font-family: 'Outfit', sans-serif !important;
+  overflow: visible !important;
+}
+
+/* Left vertical label pane overrides */
+.vis-labelset {
+  background: #f8fafc !important;
+}
+
+.vis-label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-weight: 700 !important;
+  font-size: 0.8rem !important;
+  color: #475569 !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05) !important;
+  border-right: 1px solid rgba(0, 0, 0, 0.08) !important;
+  background: #f8fafc !important;
+  font-family: 'Outfit', sans-serif !important;
+}
+
+.vis-group {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.04) !important;
+}
+
+.vis-group-label-inner {
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+}
+
+.vis-item {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.vis-item.vis-selected {
+  background-color: transparent !important;
+}
+
+.vis-item-content {
+  padding: 0 !important;
+}
+
+.vis-item .vis-onetime {
+  display: none !important;
+}
+
+.vis-custom-time, .vis-time-axis .vis-grid.vis-vertical {
+  border-left: 1px dashed rgba(79, 70, 229, 0.1) !important;
+}
+
+.vis-time-axis .vis-grid.vis-minor {
+  border-left: 1px solid rgba(0, 0, 0, 0.04) !important;
+}
+
+.vis-time-axis .vis-text {
+  color: #64748b !important;
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+}
+
+/* Styled Timeline Event Card matching the image structure */
+.timeline-event-card {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: 'Outfit', sans-serif;
+  transition: all 0.2s ease-in-out;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 250px;
+  display: inline-block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+}
+
+.timeline-event-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.timeline-card-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 20px;
+}
+
+.timeline-card-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.timeline-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Custom modern glassmorphic vis.js tooltip */
+div.vis-tooltip {
+  position: absolute;
+  visibility: hidden;
+  padding: 8px 14px !important;
+  font-family: 'Outfit', sans-serif !important;
+  font-size: 0.78rem !important;
+  font-weight: 500 !important;
+  color: #ffffff !important;
+  background-color: rgba(15, 23, 42, 0.92) !important; /* Premium Dark Slate */
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2) !important;
+  z-index: 10000 !important;
+  pointer-events: none !important;
+  line-height: 1.4 !important;
+  backdrop-filter: blur(8px) !important;
+  max-width: 280px !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+
+
+

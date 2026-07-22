@@ -14,6 +14,7 @@ from app.models.document import Document as DocumentModel
 from app.retrieval.semantic_search import retrieve_chunks, build_context_block
 from app.tools.chart_generator import ChartGenerator
 from app.tools.spreadsheet_tool import execute_pandas_query
+from app.tools.timeline_tool import execute_timeline_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -283,6 +284,17 @@ class ToolRouter:
                 "filename": export_filename,
                 "record_count": len(df) if records else 0
             }
+
+        elif tool_name == "timeline_generator":
+            document_id_str = arguments.get("document_id")
+            query = arguments.get("query", "timeline")
+            events = execute_timeline_extraction(
+                db=db,
+                user_id=user_id,
+                document_id_str=document_id_str,
+                query=query
+            )
+            return {"events": events}
 
         else:
             raise ValueError(f"Unknown tool: {tool_name}")

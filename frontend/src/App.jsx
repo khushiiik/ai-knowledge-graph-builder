@@ -325,14 +325,16 @@ export default function App() {
         const mappedMsgs = data.map(m => {
           const chartSource = m.sources ? m.sources.find(s => s.type === 'chart') : null;
           const downloadSource = m.sources ? m.sources.find(s => s.type === 'download') : null;
-          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart' && s.type !== 'download') : null;
+          const timelineSource = m.sources ? m.sources.find(s => s.type === 'timeline') : null;
+          const citations = m.sources ? m.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && s.type !== 'timeline') : null;
           return {
             sender: m.role,
             text: m.content,
             sources: citations && citations.length > 0 ? citations : null,
             chartFigure: chartSource ? chartSource.figure : null,
             downloadUrl: downloadSource ? downloadSource.downloadUrl : null,
-            downloadFilename: downloadSource ? downloadSource.downloadFilename : null
+            downloadFilename: downloadSource ? downloadSource.downloadFilename : null,
+            timelineEvents: timelineSource ? timelineSource.events : null
           };
         });
 
@@ -813,6 +815,25 @@ export default function App() {
                   }
                   return c;
                 }));
+              }
+
+              if (payload.events !== undefined || currentEvent === 'timeline') {
+                const tEvents = payload.events;
+                if (tEvents) {
+                  setConversations(prev => prev.map(c => {
+                    if (c.id === currentConvId) {
+                      const msgs = [...c.messages];
+                      if (msgs.length > 0) {
+                        msgs[msgs.length - 1] = {
+                          ...msgs[msgs.length - 1],
+                          timelineEvents: tEvents
+                        };
+                      }
+                      return { ...c, messages: msgs };
+                    }
+                    return c;
+                  }));
+                }
               }
 
               if (payload.downloadUrl !== undefined || currentEvent === 'download') {
@@ -1415,13 +1436,13 @@ export default function App() {
                 {activeConversation.messages.map((msg, i) => (
                   <div
                     key={i}
-                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure ? 'has-chart' : ''}`}
+                    className={`message-bubble ${msg.sender === 'user' ? 'user' : 'assistant'} ${msg.chartFigure || msg.timelineEvents ? 'has-chart' : ''}`}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px',
-                      width: msg.chartFigure ? '100%' : undefined,
-                      maxWidth: msg.chartFigure ? '100%' : undefined
+                      width: msg.chartFigure || msg.timelineEvents ? '100%' : undefined,
+                      maxWidth: msg.chartFigure || msg.timelineEvents ? '100%' : undefined
                     }}
                   >
                     <div>{renderMessageText(cleanMessageText(msg.text))}</div>
@@ -1512,6 +1533,11 @@ export default function App() {
                     {msg.chartFigure && (
                       <div className="chart-container" style={{ marginTop: '12px', width: '100%' }}>
                         <PlotlyChart figure={msg.chartFigure} />
+                      </div>
+                    )}
+                    {msg.timelineEvents && (
+                      <div className="timeline-container" style={{ marginTop: '12px', width: '100%' }}>
+                        <TimelineVisualization events={msg.timelineEvents} />
                       </div>
                     )}
                     {msg.sender === 'assistant' && msg.sources && msg.sources.filter(s => s.type !== 'chart' && s.type !== 'download' && (s.source || s.text)).length > 0 && (
@@ -2095,3 +2121,165 @@ function PlotlyChart({ figure }) {
     </div>
   );
 }
+
+function TimelineVisualization({ events }) {
+  const containerRef = useRef(null);
+  const timelineRef = useRef(null);
+
+  // Modern, high-contrast, pastel background & border styling matching the theme
+  const colors = [
+    { border: '#8b5cf6', bg: '#f5f3ff', text: '#6d28d9' },  // Purple / Lavender
+    { border: '#ea580c', bg: '#fff7ed', text: '#c2410c' },  // Orange / Peach
+    { border: '#2563eb', bg: '#eff6ff', text: '#1d4ed8' },  // Blue
+    { border: '#db2777', bg: '#fdf2f8', text: '#be185d' },  // Pink / Rose
+    { border: '#059669', bg: '#ecfdf5', text: '#047857' },  // Emerald
+    { border: '#0891b2', bg: '#ecfeff', text: '#0369a1' }   // Cyan
+  ];
+
+  const parseDateForTimeline = (dateStr) => {
+    if (!dateStr) return new Date();
+    let clean = dateStr.trim();
+    
+    // Match Q1/Q2/Q3/Q4 YYYY
+    const qMatch = clean.match(/^[qQ]([1-4])\s+(\d{4})$/);
+    if (qMatch) {
+      const q = parseInt(qMatch[1]);
+      const y = qMatch[2];
+      const month = (q - 1) * 3 + 1;
+      return `${y}-${String(month).padStart(2, '0')}-01`;
+    }
+    
+    // If it's just a year
+    if (/^\d{4}$/.test(clean)) {
+      return `${clean}-01-01`;
+    }
+    
+    // If it is Year-Month or Year/Month
+    if (/^\d{4}[-\/]\d{1,2}$/.test(clean)) {
+      const parts = clean.split(/[-\/]/);
+      return `${parts[0]}-${parts[1].padStart(2, '0')}-01`;
+    }
+    
+    return clean;
+  };
+
+  const getTimelineIconSvg = (group, borderCol) => {
+    const g = String(group).toLowerCase();
+    if (g.includes('milestone') || g.includes('release') || g.includes('launch')) {
+      // Flag icon
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="${borderCol}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></svg>`;
+    }
+    if (g.includes('dev') || g.includes('eng') || g.includes('tech') || g.includes('code')) {
+      // Code icon
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="${borderCol}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>`;
+    }
+    if (g.includes('warn') || g.includes('alert') || g.includes('translation') || g.includes('fail') || g.includes('err')) {
+      // Warning/Alert icon
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#ea580c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+    }
+    // Default Calendar icon
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="${borderCol}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>`;
+  };
+
+  useEffect(() => {
+    if (containerRef.current && window.vis && events && events.length > 0) {
+      try {
+        containerRef.current.innerHTML = '';
+
+        // Extract unique groups dynamically from events
+        const uniqueGroups = Array.from(new Set(events.map(e => e.group || 'General')));
+        const groups = new window.vis.DataSet(
+          uniqueGroups.map(g => ({
+            id: g,
+            content: `<div class="vis-group-label-inner">${g}</div>`
+          }))
+        );
+
+        const items = new window.vis.DataSet(
+          events.map((event, idx) => {
+            const start = parseDateForTimeline(event.date);
+            const c = colors[idx % colors.length];
+            const groupName = event.group || 'General';
+
+            const card = document.createElement('div');
+            card.className = 'timeline-event-card';
+            card.style.border = `1px solid ${c.border}`;
+            card.style.backgroundColor = c.bg;
+            card.style.color = c.text;
+
+            const inner = document.createElement('div');
+            inner.className = 'timeline-card-inner';
+
+            // Title span
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'timeline-card-title';
+            titleSpan.innerText = event.title;
+
+            // Icon span
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'timeline-card-icon';
+            iconSpan.style.color = c.border;
+            iconSpan.style.display = 'flex';
+            iconSpan.style.alignItems = 'center';
+            iconSpan.style.justifyContent = 'center';
+            iconSpan.style.flexShrink = '0';
+            iconSpan.style.marginLeft = '6px';
+            iconSpan.innerHTML = getTimelineIconSvg(event.group || '', c.border);
+
+            inner.appendChild(titleSpan);
+            inner.appendChild(iconSpan);
+            card.appendChild(inner);
+
+            return {
+              id: idx,
+              group: groupName,
+              start: start,
+              content: card,
+              title: `${event.title}: ${event.description}`
+            };
+          })
+        );
+
+        const options = {
+          width: '100%',
+          height: '350px',
+          style: 'box',
+          editable: false,
+          showCurrentTime: false,
+          zoomMin: 1000 * 60 * 60 * 24 * 7,
+          zoomMax: 1000 * 60 * 60 * 24 * 365 * 50,
+          margin: {
+            item: 10,
+            axis: 15
+          }
+        };
+
+        timelineRef.current = new window.vis.Timeline(containerRef.current, items, groups, options);
+
+        // Center timeline to fit all events dynamically on load
+        const t = setTimeout(() => {
+          if (timelineRef.current) {
+            timelineRef.current.fit();
+          }
+        }, 150);
+
+        return () => {
+          clearTimeout(t);
+          if (timelineRef.current) {
+            timelineRef.current.destroy();
+          }
+        };
+      } catch (err) {
+        console.error("Error creating vis.js timeline:", err);
+      }
+    }
+  }, [events]);
+
+  return (
+    <div className="timeline-visualization-container">
+      <h4 className="timeline-header">Visual Timeline</h4>
+      <div ref={containerRef} className="vis-timeline-wrapper" />
+    </div>
+  );
+}
+
