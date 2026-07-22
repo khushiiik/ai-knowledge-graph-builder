@@ -35,7 +35,8 @@ SYSTEM_TEMPLATE = (
     "- If the answer can be directly extracted from the retrieved context block, respond conversationally in plain text.\n"
     "- COMPREHENSIVE LISTING RULE: When the user asks for a list, directory, or enumeration of items (e.g. employees, projects, items, requirements), you MUST list ALL matching entries found in the retrieved context block. Do not stop halfway, truncate, or omit rows unless explicitly requested by the user.\n"
     "- Do not invoke 'spreadsheet_query' merely because a document contains tables or lists. Use RAG first.\n"
-    "- FORMATTING MANDATE: When presenting comparisons, multi-item lists, requirements, or structured entity details in conversational answers, format your response using a clean Markdown table (e.g. | Name / Item | Description / Details | Category / Status |) for maximum clarity and visual readability.\n\n"
+    "- FORMATTING MANDATE: When presenting comparisons, multi-item lists, requirements, or structured entity details in conversational answers, format your response using a clean Markdown table (e.g. | Name / Item | Description / Details | Category / Status |) for maximum clarity and visual readability.\n"
+    "- SUMMARIZATION RULE: When asked to summarize a document, file, or context, you MUST provide a detailed, well-structured, and comprehensive summary (not just a short summary of a small part). Organize the content clearly using sections, bullet points, and arrows (e.g. ───► or ->) to show relationships or flow. Keep the structure simple, organized, and clean. If generating code snippets, always place imports at the top, keep code simple, and do not output multiple duplicate/fragmented blocks.\n\n"
 
     "--- RELATIONAL SCHEMA MAP MANDATE ---\n"
     "- WHEN ASKED FOR A RELATIONAL SCHEMA MAP, GRAPH MAP, OR ENTITY MAP (e.g. 'Generate a relational schema map from all active knowledge base documents'):\n"

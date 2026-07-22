@@ -32,65 +32,81 @@ from app.workers.tasks import ingest_document_task
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-@router.post("/upload", response_model=DocumentRead, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=List[DocumentRead], status_code=status.HTTP_201_CREATED)
 async def upload_document(
     request: Request,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(None),
+    file: UploadFile = File(None),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user)
-) -> DocumentModel:
-    """Upload a file, validate it, and create a document record."""
-    validate_uploaded_file(file, request)
+) -> List[DocumentModel]:
+    """Upload single or multiple files in a single request, validate them, and create document records."""
+    upload_list: List[UploadFile] = []
+    if files:
+        upload_list.extend([f for f in files if f and f.filename])
+    if file and file.filename:
+        upload_list.append(file)
 
-    try:
-        stored_filename, storage_path, file_size, checksum = save_upload_file(file)
-    except Exception as e:
-        raise FileStorageSaveException(str(e))
+    if not upload_list:
+        raise HTTPException(status_code=400, detail="No valid file(s) provided in upload request.")
 
-    file_type = file.filename.split(".")[-1] if file.filename and "." in file.filename else "unknown"
-    mime_type = file.content_type or "application/octet-stream"
+    created_documents: List[DocumentModel] = []
 
-    new_doc = DocumentModel(
-        user_id=current_user.id,
-        original_filename=file.filename or "unknown",
-        stored_filename=stored_filename,
-        storage_path=storage_path,
-        file_type=file_type,
-        mime_type=mime_type,
-        file_size=file_size,
-        checksum=checksum,
-        status=DocumentStatus.QUEUED.value
-    )
-    db.add(new_doc)
-    db.commit()
-    db.refresh(new_doc)
+    for upload_file in upload_list:
+        validate_uploaded_file(upload_file, request)
 
-    job = ProcessingJob(
-        user_id=current_user.id,
-        document_id=new_doc.id,
-        job_type=ProcessingJobType.DOCUMENT_INDEXING.value,
-        status=ProcessingJobStatus.QUEUED.value
-    )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
+        try:
+            stored_filename, storage_path, file_size, checksum = save_upload_file(upload_file)
+        except Exception as e:
+            raise FileStorageSaveException(str(e))
 
-    try:
-        ingest_document_task.delay(
-            job_id_str=str(job.id),
-            document_id_str=str(new_doc.id),
-            file_path=storage_path,
+        file_type = upload_file.filename.split(".")[-1] if upload_file.filename and "." in upload_file.filename else "unknown"
+        mime_type = upload_file.content_type or "application/octet-stream"
+
+        new_doc = DocumentModel(
+            user_id=current_user.id,
+            original_filename=upload_file.filename or "unknown",
+            stored_filename=stored_filename,
+            storage_path=storage_path,
+            file_type=file_type,
             mime_type=mime_type,
-            tenant_id=current_user.id
+            file_size=file_size,
+            checksum=checksum,
+            status=DocumentStatus.QUEUED.value
         )
-    except Exception as e:
-        new_doc.status = DocumentStatus.FAILED.value
-        job.status = ProcessingJobStatus.FAILED.value
-        job.error_message = f"Failed to queue task: {str(e)}"
+        db.add(new_doc)
         db.commit()
-        raise IngestionQueueException(str(e))
+        db.refresh(new_doc)
 
-    return new_doc
+        job = ProcessingJob(
+            user_id=current_user.id,
+            document_id=new_doc.id,
+            job_type=ProcessingJobType.DOCUMENT_INDEXING.value,
+            status=ProcessingJobStatus.QUEUED.value
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+
+        try:
+            ingest_document_task.delay(
+                job_id_str=str(job.id),
+                document_id_str=str(new_doc.id),
+                file_path=storage_path,
+                mime_type=mime_type,
+                tenant_id=current_user.id
+            )
+        except Exception as e:
+            new_doc.status = DocumentStatus.FAILED.value
+            job.status = ProcessingJobStatus.FAILED.value
+            job.error_message = f"Failed to queue task: {str(e)}"
+            db.commit()
+            raise IngestionQueueException(str(e))
+
+        created_documents.append(new_doc)
+
+    return created_documents
+
 
 @router.get("", response_model=List[DocumentRead])
 def list_documents(

@@ -572,7 +572,23 @@ export default function App() {
   };
 
   // Handle Logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      const tok = localStorage.getItem('vectra_auth_token') || authToken;
+      const refTok = localStorage.getItem('vectra_refresh_token') || refreshToken;
+      if (tok || refTok) {
+        await fetch('/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(tok ? { 'Authorization': `Bearer ${tok}` } : {})
+          },
+          body: JSON.stringify({ refresh_token: refTok })
+        });
+      }
+    } catch (e) {
+      console.error("Failed to notify server of logout:", e);
+    }
     setAuthToken(null);
     setRefreshToken(null);
     setLoginUser(null);
@@ -875,25 +891,22 @@ export default function App() {
     setUploadProgress(`Ingesting ${files.length} file(s)...`);
 
     try {
-      // Perform concurrent background uploads
-      const uploadPromises = files.map(async (file) => {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const res = await fetchWithAuth('/documents/upload', {
-          method: 'POST',
-          body: formData
-        });
-        if (!res || res.status === 401) {
-          throw new Error("Unauthorized");
-        }
-        if (!res.ok) {
-          throw new Error(`Failed to upload ${file.name}`);
-        }
-        return res.json();
+      const formData = new FormData();
+      files.forEach(file => {
+        formData.append('files', file);
       });
 
-      await Promise.all(uploadPromises);
+      const res = await fetchWithAuth('/documents/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (!res || res.status === 401) {
+        throw new Error("Unauthorized");
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || 'Failed to upload document(s).');
+      }
       await fetchDocuments();
     } catch (err) {
       alert(err.message);

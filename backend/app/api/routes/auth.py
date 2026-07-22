@@ -5,7 +5,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.security import get_password_hash, verify_password, create_access_token, create_refresh_token, decode_access_token
+from app.core.security import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_access_token,
+    blacklist_token,
+    is_token_blacklisted
+)
 from app.core.exceptions import (
     EmailAlreadyRegisteredException,
     IncorrectCredentialsException,
@@ -71,7 +79,7 @@ def refresh_token(
     elif credentials and credentials.credentials:
         token_str = credentials.credentials
 
-    if not token_str:
+    if not token_str or is_token_blacklisted(token_str):
         raise CredentialsValidationException()
 
     payload = decode_access_token(token_str)
@@ -88,6 +96,9 @@ def refresh_token(
     if not user.is_active:
         raise InactiveUserException()
 
+    # Blacklist the old refresh token as part of refresh token rotation
+    blacklist_token(token_str)
+
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     new_access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
@@ -96,3 +107,15 @@ def refresh_token(
         data={"sub": user.email}
     )
     return Token(access_token=new_access_token, refresh_token=new_refresh_token, token_type="bearer")
+
+@router.post("/logout", status_code=status.HTTP_200_OK)
+def logout(
+    refresh_data: Optional[RefreshTokenRequest] = None,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+):
+    """Invalidate current access and refresh tokens."""
+    if credentials and credentials.credentials:
+        blacklist_token(credentials.credentials)
+    if refresh_data and refresh_data.refresh_token:
+        blacklist_token(refresh_data.refresh_token)
+    return {"message": "Logged out successfully. Tokens invalidated."}

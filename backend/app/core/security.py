@@ -47,9 +47,41 @@ def create_refresh_token(data: dict, expires_delta: timedelta | None = None) -> 
     return encoded_jwt
 
 def decode_access_token(token: str) -> dict[str, Any] | None:
-    """Decode and validate a JWT access token. Returns the payload or None if invalid."""
+    """Decode and validate a JWT access token. Returns the payload or None if invalid or blacklisted."""
+    if is_token_blacklisted(token):
+        return None
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
     except InvalidTokenError:
         return None
+
+# Token Blacklist Mechanism
+_in_memory_blacklist: set[str] = set()
+
+def blacklist_token(token: str) -> None:
+    """Invalidates a JWT token by adding it to the blacklist."""
+    if not token:
+        return
+    _in_memory_blacklist.add(token)
+    try:
+        import redis
+        client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        client.setex(f"blacklist:{token}", 604800, "1") # Expire after 7 days
+    except Exception:
+        pass
+
+def is_token_blacklisted(token: str) -> bool:
+    """Checks if a JWT token has been invalidated."""
+    if not token:
+        return False
+    if token in _in_memory_blacklist:
+        return True
+    try:
+        import redis
+        client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        if client.get(f"blacklist:{token}"):
+            return True
+    except Exception:
+        pass
+    return False
