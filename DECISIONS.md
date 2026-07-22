@@ -249,3 +249,35 @@ This file documents the major technical decisions made in the AI Knowledge Graph
   * Increases prompt context length for complex listing queries while preserving single-fact speed for simple questions.
   * **At Scale (10,000+ users)**: Yes. Ensures zero data loss for reporting while maintaining sub-second responses for targeted queries.
 
+---
+
+### 15. Timeline Builder & Side-by-Side Comparison Tables
+
+* **Decision Title**: Interactive Timeline Extraction and Side-by-Side Document Comparison
+* **Options Considered**: Textual tables, D3.js custom timeline, vis.js Timeline, HTML static grid
+* **Chosen Option**: `vis.js Timeline` for chronological events, and glassmorphic HTML grid layouts for comparative matrices.
+* **Rationale**:
+  - **Timeline Builder**: `vis.js Timeline` handles zoom scales (days to years) out-of-the-box. Dynamic group categorizations segment different event types (e.g. legal, milestones, engineering) into clean horizontal swimlanes. Custom inline icons (calendars, milestones, codes) replace cluttered user profile avatars, and a dynamic `.fit()` call ensures all milestones scale perfectly within view upon load.
+  - **Comparison Matrix**: Generates a structured JSON matrix `{"headers": ["Feature / Attribute", "Entity A", "Entity B"], "rows": [{"Feature / Attribute": "Cost", "Entity A": "$10k", "Entity B": "$15k"}]}` dynamically processed by the LLM. 
+  - **Matching & Normalization**: Strips casing, hyphens, and underscores (`_`) before verifying document existence. This allows snake_case filenames to match conversational space-separated inputs instantly without generating false-positive warnings.
+  - **Fuzzy Agreement confirms**: The chat route uses a sliding-window character difference matcher (`fuzzy_replace`) to parse confirmations (like `yes`/`yep`/`sure`). If the user agrees to a file suggestion, the system swaps the misspelled term inside the previous query and re-runs the tool pipeline seamlessly.
+* **Trade-offs**:
+  - Requires loading vis.js and layout stylesheet references from CDNs.
+  - **At Scale (10,000+ users)**: Yes. Dynamic client-side layout rendering preserves backend database workloads.
+
+---
+
+### 16. Cytoscape.js Knowledge Graph Visualizer
+
+* **Decision Title**: Cytoscape.js Interactive Graph Visualization
+* **Options Considered**: D3.js, vis.js Network, Cytoscape.js
+* **Chosen Option**: `Cytoscape.js`
+* **Rationale**:
+  - **Cytoscape.js**: Outperforms vis.js Network in drawing large relational graphs. Cytoscape supports compound nodes, complex arrow directions, and automatic graph positioning libraries.
+  - **Compound Layout (`cose`)**: COSE (Compound Spring Embedder) layout automatically groups clustered entities together, offering an outstanding graphical visualization of Neo4j relationships.
+  - **Theme Integration**: Custom node/edge styling rules (indigo node backgrounds, white node borders, bezier edge paths, autorotated relation labels) match the premium glassmorphism theme perfectly.
+  - **Left-margin Scroll Gutter**: A 44px left margin gutter offset ensures users can hover and mouse-scroll the main dashboard panel without having their scroll wheel locked inside the Cytoscape graph container.
+* **Trade-offs**:
+  - Loading extra visualization libraries dynamically in the browser window.
+  - **At Scale (10,000+ users)**: Yes. All graph nodes are resolved via database queries restricted strictly to the user's `userId`, ensuring complete multi-tenant tenant isolation before rendering.
+

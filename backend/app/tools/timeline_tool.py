@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+import uuid
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -24,10 +25,14 @@ def execute_timeline_extraction(
     
     document = None
     if document_id_str and document_id_str != "<document_id>":
+        try:
+            doc_uuid = uuid.UUID(document_id_str) if isinstance(document_id_str, str) else document_id_str
+        except ValueError:
+            doc_uuid = document_id_str
         document = (
             db.query(DocumentModel)
             .filter(
-                DocumentModel.id == document_id_str,
+                DocumentModel.id == doc_uuid,
                 DocumentModel.user_id == user_id,
                 DocumentModel.deleted_at.is_(None)
             )

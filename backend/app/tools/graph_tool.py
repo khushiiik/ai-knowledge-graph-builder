@@ -1,9 +1,11 @@
 import logging
+import uuid
 from typing import Dict, Any, List
 from sqlalchemy.orm import Session
 
 from app.models.document import Document as DocumentModel
 from app.db.neo4j_client import query_all_user_facts, query_document_facts
+from app.tools.comparison_tool import normalize_name, clean_ext
 
 logger = logging.getLogger(__name__)
 
@@ -14,13 +16,7 @@ def execute_graph_extraction(
     query: str
 ) -> Dict[str, Any]:
     """
-    Retrieves nodes and edges from Neo4j to build a Cytoscape.js compatible graph:
-    {
-      "elements": [
-        {"data": {"id": "node1", "label": "node1", "type": "Entity"}},
-        {"data": {"id": "edge1", "source": "node1", "target": "node2", "label": "RELATION"}}
-      ]
-    }
+    Retrieves nodes and edges from Neo4j to build a Cytoscape.js compatible graph.
     """
     logger.info(f"Starting graph retrieval for user {user_id}, query: {query}")
 
@@ -32,8 +28,7 @@ def execute_graph_extraction(
 
     target_doc = None
     if all_docs:
-        # Check if the query matches any document name (using normalized check)
-        from app.tools.comparison_tool import normalize_name, clean_ext
+        # Check if the query matches any document name
         for doc in all_docs:
             doc_norm = normalize_name(clean_ext(doc.original_filename))
             query_norm = normalize_name(query)
@@ -43,10 +38,14 @@ def execute_graph_extraction(
 
     # Focus fallback
     if not target_doc and document_id_str and document_id_str != "<document_id>":
+        try:
+            doc_uuid = uuid.UUID(document_id_str) if isinstance(document_id_str, str) else document_id_str
+        except ValueError:
+            doc_uuid = document_id_str
         target_doc = (
             db.query(DocumentModel)
             .filter(
-                DocumentModel.id == document_id_str,
+                DocumentModel.id == doc_uuid,
                 DocumentModel.user_id == user_id,
                 DocumentModel.deleted_at.is_(None)
             )

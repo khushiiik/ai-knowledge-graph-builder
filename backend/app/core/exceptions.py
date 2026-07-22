@@ -94,3 +94,39 @@ class IngestionQueueException(HTTPException):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to queue document ingestion: {error_msg}"
         )
+
+
+class EmptyQuestionException(HTTPException):
+    """Exception raised when a user submits an empty chat query."""
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Question cannot be empty."
+        )
+
+
+class NoFilesProvidedException(HTTPException):
+    """Exception raised when an upload request contains no files."""
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No valid file(s) provided in upload request."
+        )
+
+
+class AccessDeniedException(HTTPException):
+    """Exception raised when a user tries to access a resource belonging to another tenant."""
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+
+
+class ExportFileNotFoundException(HTTPException):
+    """Exception raised when a requested export file is not found on disk."""
+    def __init__(self):
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Export file not found"
+        )

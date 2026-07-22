@@ -6,12 +6,12 @@ import logging
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.core.exceptions import ConversationNotFoundException
+from app.core.exceptions import ConversationNotFoundException, EmptyQuestionException
 from app.dependencies import get_db, get_current_active_user, SessionLocal
 from app.models.user import User as UserModel
 from app.models.conversation import Conversation
@@ -125,6 +125,8 @@ def ask_question(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_active_user),
 ) -> StreamingResponse:
+    if not payload.question or not payload.question.strip():
+        raise EmptyQuestionException()
     conversation = _get_or_create_conversation(db, current_user, payload.conversation_id)
 
     db_messages = (

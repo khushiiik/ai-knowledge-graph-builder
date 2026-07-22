@@ -12,7 +12,10 @@ from app.core.exceptions import (
     DocumentNotFoundException,
     FileStorageSaveException,
     IngestionQueueException,
-    CredentialsValidationException
+    CredentialsValidationException,
+    NoFilesProvidedException,
+    AccessDeniedException,
+    ExportFileNotFoundException
 )
 from app.core.security import decode_access_token
 from app.config import settings
@@ -48,7 +51,7 @@ async def upload_document(
         upload_list.append(file)
 
     if not upload_list:
-        raise HTTPException(status_code=400, detail="No valid file(s) provided in upload request.")
+        raise NoFilesProvidedException()
 
     created_documents: List[DocumentModel] = []
 
@@ -268,10 +271,10 @@ def download_export(
     resolved_path = os.path.normpath(os.path.abspath(file_path))
     expected_prefix = os.path.normpath(os.path.abspath(os.path.join("storage", "exports", str(user.id))))
     if not os.path.normcase(resolved_path).startswith(os.path.normcase(expected_prefix)):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+        raise AccessDeniedException()
 
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Export file not found")
+        raise ExportFileNotFoundException()
 
     return FileResponse(file_path, filename=filename)
 
