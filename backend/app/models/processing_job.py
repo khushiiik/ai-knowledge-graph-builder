@@ -5,12 +5,14 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.user import Base
 
+
 class ProcessingJobStatus(str, Enum):
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
 
 class ProcessingJobType(str, Enum):
     DOCUMENT_INDEXING = "DOCUMENT_INDEXING"
@@ -23,17 +25,27 @@ class ProcessingJobType(str, Enum):
     EXPORT_EXCEL = "EXPORT_EXCEL"
     EXPORT_CSV = "EXPORT_CSV"
 
+
 class ProcessingJob(Base):
     __tablename__ = "processing_jobs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     conversation_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     message_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
     job_type = Column(String, nullable=False, index=True)
-    status = Column(String, default=ProcessingJobStatus.QUEUED.value, nullable=False, index=True)
+    status = Column(
+        String, default=ProcessingJobStatus.QUEUED.value, nullable=False, index=True
+    )
     progress = Column(Integer, default=0, nullable=False)
     current_step = Column(String, nullable=True)
     retry_count = Column(Integer, default=0, nullable=False)

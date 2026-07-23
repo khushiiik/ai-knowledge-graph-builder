@@ -13,32 +13,37 @@ from app.schemas.user import TokenData
 engine = create_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 def get_db() -> Generator[Session, None, None]:
     """Database session lifecycle generator dependency."""
-    db = SessionLocal()
+    db_session = SessionLocal()
     try:
-        yield db
+        yield db_session
     finally:
-        db.close()
+        db_session.close()
+
 
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> UserModel:
     """Validate bearer token and retrieve the user from database."""
-    payload = decode_access_token(credentials.credentials)
-    if payload is None:
+    decoded_token_payload = decode_access_token(credentials.credentials)
+    if decoded_token_payload is None:
         raise CredentialsValidationException()
-    
-    email: str | None = payload.get("sub")
+
+    email: str | None = decoded_token_payload.get("sub")
     if email is None:
         raise CredentialsValidationException()
-    
+
     token_data = TokenData(email=email)
-    user = db.query(UserModel).filter(UserModel.email == token_data.email).first()
-    if user is None:
+    user_by_email = (
+        db.query(UserModel).filter(UserModel.email == token_data.email).first()
+    )
+    if user_by_email is None:
         raise CredentialsValidationException()
-    return user
+    return user_by_email
+
 
 async def get_current_active_user(
     current_user: Annotated[UserModel, Depends(get_current_user)],

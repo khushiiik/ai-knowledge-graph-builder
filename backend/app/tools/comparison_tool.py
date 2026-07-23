@@ -11,49 +11,56 @@ from app.llm.providers.factory import get_llm_provider
 
 logger = logging.getLogger(__name__)
 
+
 def clean_ext(filename: str) -> str:
     orig_clean = filename.lower()
-    for ext in ['.docx', '.pdf', '.csv', '.xlsx', '.txt']:
-        if orig_clean.endswith(ext):
-            return filename[:-len(ext)]
+    for extension in [".docx", ".pdf", ".csv", ".xlsx", ".txt"]:
+        if orig_clean.endswith(extension):
+            return filename[: -len(extension)]
     return filename
 
-def normalize_name(name: str) -> str:
-    n = name.lower()
-    n = n.replace('_', ' ').replace('-', ' ')
-    return " ".join(n.split())
 
-def find_document_match(extracted_name: str, all_docs: List[DocumentModel]):
+def normalize_name(name: str) -> str:
+    normalized_name_str = name.lower()
+    normalized_name_str = normalized_name_str.replace("_", " ").replace("-", " ")
+    return " ".join(normalized_name_str.split())
+
+
+def find_document_match(extracted_name: str, all_documents: List[DocumentModel]):
     extracted_norm = normalize_name(extracted_name)
     if not extracted_norm:
         return None, None
-    
+
     # 1. Check for exact or substring match after normalization
-    for doc in all_docs:
-        orig_clean = clean_ext(doc.original_filename)
+    for document in all_documents:
+        orig_clean = clean_ext(document.original_filename)
         orig_norm = normalize_name(orig_clean)
-        if extracted_norm == orig_norm or extracted_norm in orig_norm or orig_norm in extracted_norm:
-            return doc, None
-            
+        if (
+            extracted_norm == orig_norm
+            or extracted_norm in orig_norm
+            or orig_norm in extracted_norm
+        ):
+            return document, None
+
     # 2. Check for close fuzzy match using normalized names
     doc_names_map = {}
-    for doc in all_docs:
-        orig_clean = clean_ext(doc.original_filename)
+    for document in all_documents:
+        orig_clean = clean_ext(document.original_filename)
         orig_norm = normalize_name(orig_clean)
-        doc_names_map[orig_norm] = doc
-        
-    matches = difflib.get_close_matches(extracted_norm, list(doc_names_map.keys()), n=1, cutoff=0.5)
+        doc_names_map[orig_norm] = document
+
+    matches = difflib.get_close_matches(
+        extracted_norm, list(doc_names_map.keys()), n=1, cutoff=0.5
+    )
     if matches:
         closest_norm = matches[0]
         return None, clean_ext(doc_names_map[closest_norm].original_filename)
-        
+
     return None, None
 
+
 def execute_comparison_extraction(
-    db: Session,
-    user_id: int,
-    document_id_str: str | None,
-    query: str
+    db: Session, user_id: int, document_id_str: str | None, query: str
 ) -> Dict[str, Any]:
     """
     Compares entities across documents and extracts a structured comparison matrix.
@@ -62,48 +69,60 @@ def execute_comparison_extraction(
     logger.info(f"Starting comparison extraction for user {user_id}, query: {query}")
 
     # Fetch all user documents
-    all_docs = db.query(DocumentModel).filter(
-        DocumentModel.user_id == user_id,
-        DocumentModel.deleted_at.is_(None)
-    ).all()
+    all_documents = (
+        db.query(DocumentModel)
+        .filter(DocumentModel.user_id == user_id, DocumentModel.deleted_at.is_(None))
+        .all()
+    )
 
-    if len(all_docs) == 0:
-        return {"warning": "Your knowledge base is empty. Please upload documents before generating a comparison."}
+    if len(all_documents) == 0:
+        return {
+            "warning": "Your knowledge base is empty. Please upload documents before generating a comparison."
+        }
 
     # Query LLM to extract entity/document names from user query
     provider = get_llm_provider()
-    doc_list_prompt = [
-        ("system", (
-            "You are an assistant that extracts entity or document names from user comparison queries.\n"
-            "Based on the user query, identify the names of the documents, companies, projects, or entities the user wants to compare.\n"
-            "Return ONLY a JSON list of strings, for example: [\"Solaris Byte Systems Data\", \"IT Company Data\"].\n"
-            "Do not return any other text, markdown, or comments."
-        )),
-        ("human", f"User query: {query}")
+    document_list_prompt = [
+        (
+            "system",
+            (
+                "You are an assistant that extracts entity or document names from user comparison queries.\n"
+                "Based on the user query, identify the names of the documents, companies, projects, or entities the user wants to compare.\n"
+                'Return ONLY a JSON list of strings, for example: ["Solaris Byte Systems Data", "IT Company Data"].\n'
+                "Do not return any other text, markdown, or comments."
+            ),
+        ),
+        ("human", f"User query: {query}"),
     ]
 
     extracted_names = []
     try:
-        extract_resp = provider.llm.invoke(doc_list_prompt)
-        match = re.search(r"\[[\s\S]*\]", str(extract_resp.content))
+        extraction_response = provider.llm.invoke(document_list_prompt)
+        match = re.search(r"\[[\s\S]*\]", str(extraction_response.content))
         if match:
             extracted_names = json.loads(match.group(0))
-    except Exception as e:
-        logger.error(f"Failed to extract document names from query: {e}")
+    except Exception as error:
+        logger.error(f"Failed to extract document names from query: {error}")
 
     # Validate extracted entities against uploaded documents
     if extracted_names:
         for name in extracted_names:
-            doc, suggestion = find_document_match(name, all_docs)
-            if not doc:
+            document, suggestion = find_document_match(name, all_documents)
+            if not document:
                 if suggestion:
-                    return {"warning": f'"{name}" is not available. Did you mean "{suggestion}"?'}
+                    return {
+                        "warning": f'"{name}" is not available. Did you mean "{suggestion}"?'
+                    }
                 else:
-                    return {"warning": f'"{name}" is not available in your knowledge base. Please upload it to compare.'}
+                    return {
+                        "warning": f'"{name}" is not available in your knowledge base. Please upload it to compare.'
+                    }
 
     # For comparison, we retrieve chunks across all documents (source_file = None)
     search_query = f"{query} compare comparison difference side-by-side details features specifications candidate product company project candidates products companies projects"
-    chunks = retrieve_chunks(search_query, tenant_id=user_id, limit=25, source_file=None)
+    chunks = retrieve_chunks(
+        search_query, tenant_id=user_id, limit=25, source_file=None
+    )
 
     context_block = build_context_block(chunks)
     if not context_block:
@@ -120,11 +139,11 @@ def execute_comparison_extraction(
         "3. Generate a structured JSON response with the following keys:\n"
         "   - 'headers': An array of strings where the first element is 'Feature / Attribute', followed by the names of the entities compared.\n"
         "   - 'rows': An array of flat objects where each object represents a feature row. The keys of the objects must exactly match the values in the 'headers' array. For example, if headers are ['Feature / Attribute', 'Entity A', 'Entity B'], each row must look like: { 'Feature / Attribute': 'Cost', 'Entity A': '$10k', 'Entity B': '$15k' }.\n\n"
-        "Output ONLY a valid JSON object of the format: { \"headers\": [...], \"rows\": [...] }. Do not include markdown code fences, comments, or explanations."
+        'Output ONLY a valid JSON object of the format: { "headers": [...], "rows": [...] }. Do not include markdown code fences, comments, or explanations.'
     )
     extraction_prompt = [
         ("system", system_prompt),
-        ("human", f"Document Context:\n{context_block}\n\nComparison Request: {query}")
+        ("human", f"Document Context:\n{context_block}\n\nComparison Request: {query}"),
     ]
 
     response = provider.llm.invoke(extraction_prompt)
@@ -138,18 +157,26 @@ def execute_comparison_extraction(
             parsed = json.loads(obj_match.group(0))
             if isinstance(parsed, dict) and "headers" in parsed and "rows" in parsed:
                 # Basic validation
-                headers = [str(h).strip() for h in parsed["headers"] if h]
+                headers = [
+                    str(header).strip() for header in parsed["headers"] if header
+                ]
                 rows = []
-                for r in parsed["rows"]:
-                    if isinstance(r, dict):
-                        row_obj = {}
-                        for h in headers:
-                            row_obj[h] = str(r.get(h, r.get(h.lower(), "N/A"))).strip()
-                        rows.append(row_obj)
+                for row_item in parsed["rows"]:
+                    if isinstance(row_item, dict):
+                        row_object = {}
+                        for header in headers:
+                            row_object[header] = str(
+                                row_item.get(
+                                    header, row_item.get(header.lower(), "N/A")
+                                )
+                            ).strip()
+                        rows.append(row_object)
                 if len(headers) > 1:
                     result = {"headers": headers, "rows": rows}
-        except Exception as e:
-            logger.error(f"Failed to parse comparison JSON object: {e}")
+        except Exception as error:
+            logger.error(f"Failed to parse comparison JSON object: {error}")
 
-    logger.info(f"Successfully generated comparison table with {len(result['rows'])} rows.")
+    logger.info(
+        f"Successfully generated comparison table with {len(result['rows'])} rows."
+    )
     return result

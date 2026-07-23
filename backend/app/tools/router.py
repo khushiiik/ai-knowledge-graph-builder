@@ -70,7 +70,7 @@ class ToolRouter:
                     .filter(
                         DocumentModel.id == document_id_str,
                         DocumentModel.user_id == user_id,
-                        DocumentModel.deleted_at.is_(None)
+                        DocumentModel.deleted_at.is_(None),
                     )
                     .first()
                 )
@@ -79,7 +79,7 @@ class ToolRouter:
                     db.query(DocumentModel)
                     .filter(
                         DocumentModel.user_id == user_id,
-                        DocumentModel.deleted_at.is_(None)
+                        DocumentModel.deleted_at.is_(None),
                     )
                     .order_by(DocumentModel.updated_at.desc())
                     .first()
@@ -93,7 +93,7 @@ class ToolRouter:
                 x_col = x if (x and x in cols) else cols[0]
                 y_col = y if (y and y in cols) else (cols[1] if len(cols) > 1 else None)
             # Case 2: Document is a spreadsheet CSV/Excel file
-            elif document and document.file_type.lower() in ('csv', 'xlsx', 'xls'):
+            elif document and document.file_type.lower() in ("csv", "xlsx", "xls"):
                 df = load_csv(document)
                 cols = {c.lower(): c for c in df.columns}
                 x_col = cols.get(x.lower(), x) if x else df.columns[0]
@@ -108,16 +108,24 @@ class ToolRouter:
 
                         if agg_type == "count":
                             if y_col:
-                                df = df.groupby(x_col)[y_col].count().reset_index(name="count")
+                                df = (
+                                    df.groupby(x_col)[y_col]
+                                    .count()
+                                    .reset_index(name="count")
+                                )
                             else:
                                 df = df.groupby(x_col).size().reset_index(name="count")
                             y_col = "count"
                         else:
                             if y_col:
                                 df[y_col] = pd.to_numeric(df[y_col], errors="coerce")
-                                df = df.groupby(x_col)[y_col].agg(agg_type).reset_index()
+                                df = (
+                                    df.groupby(x_col)[y_col].agg(agg_type).reset_index()
+                                )
                             else:
-                                raise ValueError(f"Aggregation '{aggregation}' requires a numeric Y column")
+                                raise ValueError(
+                                    f"Aggregation '{aggregation}' requires a numeric Y column"
+                                )
             else:
                 raise ValueError("No valid chart dataset or spreadsheet document found")
 
@@ -143,7 +151,11 @@ class ToolRouter:
             document = None
             if document_id_str and document_id_str != "<document_id>":
                 try:
-                    doc_uuid = uuid.UUID(document_id_str) if isinstance(document_id_str, str) else document_id_str
+                    doc_uuid = (
+                        uuid.UUID(document_id_str)
+                        if isinstance(document_id_str, str)
+                        else document_id_str
+                    )
                 except ValueError:
                     doc_uuid = document_id_str
                 document = (
@@ -151,7 +163,7 @@ class ToolRouter:
                     .filter(
                         DocumentModel.id == doc_uuid,
                         DocumentModel.user_id == user_id,
-                        DocumentModel.deleted_at.is_(None)
+                        DocumentModel.deleted_at.is_(None),
                     )
                     .first()
                 )
@@ -162,7 +174,7 @@ class ToolRouter:
                     db.query(DocumentModel)
                     .filter(
                         DocumentModel.user_id == user_id,
-                        DocumentModel.deleted_at.is_(None)
+                        DocumentModel.deleted_at.is_(None),
                     )
                     .order_by(DocumentModel.updated_at.desc())
                     .first()
@@ -172,7 +184,9 @@ class ToolRouter:
                 raise ValueError("No active document found for export")
 
             # Retrieve relevant chunks for context
-            chunks = retrieve_chunks(query, tenant_id=user_id, limit=15, source_file=document.stored_filename)
+            chunks = retrieve_chunks(
+                query, tenant_id=user_id, limit=15, source_file=document.stored_filename
+            )
             if not chunks:
                 chunks = retrieve_chunks(query, tenant_id=user_id, limit=15)
             context_block = build_context_block(chunks)
@@ -181,19 +195,25 @@ class ToolRouter:
             provider = get_llm_provider()
 
             extraction_prompt = [
-                ("system", (
-                    "You are an expert data analyst and data engineering agent.\n"
-                    "Your task is to extract structured, high-quality tabular data from the provided document context based on the user's request: '{query}'.\n\n"
-                    "FORMATTING & QUALITY RULES:\n"
-                    "1. Thoroughly analyze the document context and identify all key entities, requirements, specifications, features, milestones, or key data points matching the request.\n"
-                    "2. Create a logical, well-structured tabular schema with clear, informative column names.\n"
-                    "   - For a requirements or project document, use columns such as: [\"ID\", \"Category / Section\", \"Item Name / Requirement\", \"Description / Details\", \"Priority / Status\", \"Tech Stack / Note\"].\n"
-                    "   - For data sheets or candidate profiles, use relevant entity attributes as column headers.\n"
-                    "3. Ensure EVERY object in the list uses the exact same keys (columns).\n"
-                    "4. Values must be clear, complete, and informative text strings.\n"
-                    "5. Output ONLY a valid JSON array of flat objects (key-value pairs). Do NOT include markdown code fences (```json), commentary, or explanations."
-                ).format(query=query)),
-                ("human", f"Document Context:\n{context_block}\n\nExtraction Request: {query}")
+                (
+                    "system",
+                    (
+                        "You are an expert data analyst and data engineering agent.\n"
+                        "Your task is to extract structured, high-quality tabular data from the provided document context based on the user's request: '{query}'.\n\n"
+                        "FORMATTING & QUALITY RULES:\n"
+                        "1. Thoroughly analyze the document context and identify all key entities, requirements, specifications, features, milestones, or key data points matching the request.\n"
+                        "2. Create a logical, well-structured tabular schema with clear, informative column names.\n"
+                        '   - For a requirements or project document, use columns such as: ["ID", "Category / Section", "Item Name / Requirement", "Description / Details", "Priority / Status", "Tech Stack / Note"].\n'
+                        "   - For data sheets or candidate profiles, use relevant entity attributes as column headers.\n"
+                        "3. Ensure EVERY object in the list uses the exact same keys (columns).\n"
+                        "4. Values must be clear, complete, and informative text strings.\n"
+                        "5. Output ONLY a valid JSON array of flat objects (key-value pairs). Do NOT include markdown code fences (```json), commentary, or explanations."
+                    ).format(query=query),
+                ),
+                (
+                    "human",
+                    f"Document Context:\n{context_block}\n\nExtraction Request: {query}",
+                ),
             ]
 
             response = provider.llm.invoke(extraction_prompt)
@@ -234,23 +254,29 @@ class ToolRouter:
                 lines = [l.strip() for l in response_content.splitlines() if l.strip()]
                 table_lines = [l for l in lines if "|" in l]
                 if len(table_lines) >= 2:
-                    headers = [h.strip() for h in table_lines[0].split("|") if h.strip()]
+                    headers = [
+                        h.strip() for h in table_lines[0].split("|") if h.strip()
+                    ]
                     for row_line in table_lines[1:]:
                         if "---" in row_line:
                             continue
                         cells = [c.strip() for c in row_line.split("|") if c.strip()]
                         if cells and len(cells) == len(headers):
                             records.append(dict(zip(headers, cells)))
-                
+
                 if not records:
                     for line in lines:
                         if line.startswith("```"):
                             continue
                         if ":" in line:
                             k, v = line.split(":", 1)
-                            records.append({"Item": k.strip("-*# "), "Details": v.strip()})
+                            records.append(
+                                {"Item": k.strip("-*# "), "Details": v.strip()}
+                            )
                         elif len(line) > 3:
-                            records.append({"Requirement / Information": line.strip("-*# ")})
+                            records.append(
+                                {"Requirement / Information": line.strip("-*# ")}
+                            )
 
             # Flatten any nested dictionaries in values to strings for clean Pandas CSV export
             if records:
@@ -288,17 +314,14 @@ class ToolRouter:
             return {
                 "download_url": f"/documents/download/{export_filename}",
                 "filename": export_filename,
-                "record_count": len(df) if records else 0
+                "record_count": len(df) if records else 0,
             }
 
         elif tool_name == "timeline_generator":
             document_id_str = arguments.get("document_id")
             query = arguments.get("query", "timeline")
             events = execute_timeline_extraction(
-                db=db,
-                user_id=user_id,
-                document_id_str=document_id_str,
-                query=query
+                db=db, user_id=user_id, document_id_str=document_id_str, query=query
             )
             return {"events": events}
 
@@ -306,10 +329,7 @@ class ToolRouter:
             document_id_str = arguments.get("document_id")
             query = arguments.get("query", "compare")
             data = execute_comparison_extraction(
-                db=db,
-                user_id=user_id,
-                document_id_str=document_id_str,
-                query=query
+                db=db, user_id=user_id, document_id_str=document_id_str, query=query
             )
             return {"comparison_data": data}
 
@@ -317,10 +337,7 @@ class ToolRouter:
             document_id_str = arguments.get("document_id")
             query = arguments.get("query", "graph")
             data = execute_graph_extraction(
-                db=db,
-                user_id=user_id,
-                document_id_str=document_id_str,
-                query=query
+                db=db, user_id=user_id, document_id_str=document_id_str, query=query
             )
             return {"graph_data": data}
 

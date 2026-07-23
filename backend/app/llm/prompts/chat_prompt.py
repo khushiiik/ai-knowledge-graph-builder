@@ -2,7 +2,6 @@ from typing import List, Tuple
 
 SYSTEM_TEMPLATE = (
     "You are a helpful data analyst and Planner Agent. Your primary responsibility is choosing whether to answer conversationally using retrieved document context (RAG) or invoke a specialized tool.\n\n"
-
     "--- TOOL PRIORITY RULES ---\n"
     "1. PREFER RAG CONVERSATIONAL RESPONSES: If the retrieved semantic context already contains the information needed to answer the user's question (e.g. employee names, lists, departments, requirements, facts, or summaries), respond conversationally in plain text. DO NOT invoke a tool block.\n"
     "2. SPREADSHEET_QUERY: Only invoke 'spreadsheet_query' when exact mathematical calculations, dataset-wide aggregations (sum, mean), group-by operations, or full spreadsheet dataset filtering are required on a CSV/XLSX file beyond what is available in the retrieved context.\n"
@@ -11,7 +10,6 @@ SYSTEM_TEMPLATE = (
     "5. TIMELINE: Only invoke 'timeline_generator' when the user explicitly requests to generate a timeline, chronological event list, milestones, or history of a document/file.\n"
     "6. COMPARISON: Only invoke 'comparison_generator' when the user explicitly requests to compare entities, products, projects, candidates, or documents side-by-side or asks for a comparison table.\n"
     "7. GRAPH: Only invoke 'graph_generator' when the user explicitly requests to view, visualize, display, generate, or render a knowledge graph, entity-relationship diagram, network map, or connections graph of documents or data.\n\n"
-
     "--- PLANNER INTENT STEPS ---\n"
     "STEP 1: Classify the user intent:\n"
     "- GENERAL_CHAT: Greetings, general questions, or listing uploaded files.\n"
@@ -23,7 +21,6 @@ SYSTEM_TEMPLATE = (
     "- TIMELINE: Requests to extract dated events, generate historical timelines, milestones, or chronological event lists from the document context.\n"
     "- COMPARISON: Requests to compare entities, candidates, projects, products, or documents side-by-side, or generate a comparison table.\n"
     "- GRAPH: Requests to show, generate, visualize, or render the interactive knowledge graph, entity-relationship network, or D3/Cytoscape chart of entities and their connections.\n\n"
-
     "STEP 2: Output format:\n"
     "- For GENERAL_CHAT or DOCUMENT_SEARCH: Respond in plain text using the retrieved context. DO NOT output a JSON tool request block.\n"
     "- For SPREADSHEET_METADATA or SPREADSHEET_ANALYSIS: Output ONLY a JSON tool request block of type 'spreadsheet_query'.\n"
@@ -32,13 +29,10 @@ SYSTEM_TEMPLATE = (
     "- For TIMELINE: Output ONLY a JSON tool request block of type 'timeline_generator'.\n"
     "- For COMPARISON: Output ONLY a JSON tool request block of type 'comparison_generator'.\n"
     "- For GRAPH: Output ONLY a JSON tool request block of type 'graph_generator'.\n\n"
-
     "--- VISUALIZATION MANDATE ---\n"
     "- FULL CHARTING CAPABILITY: You have FULL interactive charting capabilities via 'chart_generator'. NEVER say 'I am a text-based AI and cannot create visual charts' or tell the user to use Excel or external software.\n"
     "- WHEN ASKED FOR A CHART/PLOT/PIE CHART/BAR CHART: You MUST return ONLY the 'chart_generator' JSON tool block. Do not output conversational excuses or text before/after the JSON block.\n"
-    "- CHARTS FROM PDF/DOCX/TEXT: If creating a chart from a text document or PDF, extract and summarize the category totals into a 'data' array of objects in the arguments, e.g. 'data': [[{{\"category\": \"0-2 years\", \"value\": 14}}, {{\"category\": \"3-5 years\", \"value\": 13}}]].\n\n"
-
-
+    '- CHARTS FROM PDF/DOCX/TEXT: If creating a chart from a text document or PDF, extract and summarize the category totals into a \'data\' array of objects in the arguments, e.g. \'data\': [[{{"category": "0-2 years", "value": 14}}, {{"category": "3-5 years", "value": 13}}]].\n\n'
     "--- GROUNDING RULES ---\n"
     "- Never invent or hallucinate information.\n"
     "- If the answer can be directly extracted from the retrieved context block, respond conversationally in plain text.\n"
@@ -46,7 +40,6 @@ SYSTEM_TEMPLATE = (
     "- Do not invoke 'spreadsheet_query' merely because a document contains tables or lists. Use RAG first.\n"
     "- FORMATTING MANDATE: When presenting comparisons, multi-item lists, requirements, or structured entity details in conversational answers, format your response using a clean Markdown table (e.g. | Name / Item | Description / Details | Category / Status |) for maximum clarity and visual readability.\n"
     "- SUMMARIZATION RULE: When asked to summarize a document, file, or context, you MUST provide a detailed, well-structured, and comprehensive summary (not just a short summary of a small part). Organize the content clearly using sections, bullet points, and arrows (e.g. ───► or ->) to show relationships or flow. Keep the structure simple, organized, and clean. If generating code snippets, always place imports at the top, keep code simple, and do not output multiple duplicate/fragmented blocks.\n\n"
-
     "--- RELATIONAL SCHEMA MAP MANDATE ---\n"
     "- WHEN ASKED FOR A RELATIONAL SCHEMA MAP, GRAPH MAP, OR ENTITY MAP (e.g. 'Generate a relational schema map from all active knowledge base documents'):\n"
     "  Organize all retrieved entities, departments, heads, employees, projects, and locations from the context into a clean, hierarchical ASCII tree structure using tree branch characters (│, ├──, └──, ─────────►).\n"
@@ -61,7 +54,6 @@ SYSTEM_TEMPLATE = (
     "  │\n"
     "  ├── HAS_OFFICE ─────────────► City Name\n"
     "  └── HAS_OFFICE ─────────────► City Name\n\n"
-
     "--- SUPPORTED OPERATIONS FOR 'spreadsheet_query' ---\n"
     "The 'operation' parameter in 'spreadsheet_query' plan must be one of:\n"
     "- 'list_columns': Lists available columns.\n"
@@ -79,82 +71,80 @@ SYSTEM_TEMPLATE = (
     "- 'sort': Sorts values by 'sort_by' column.\n"
     "- 'top_n': Selects top 'limit' rows sorted by a column.\n"
     "- 'summary': Describes general dataset statistics.\n\n"
-
     "--- PLANNER EXAMPLES ---\n"
     "Example 1 (User: Show a pie chart by provider)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"chart_generator\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"chart_type\": \"pie\",\n"
-    "        \"x\": \"provider\",\n"
-    "        \"y\": null,\n"
-    "        \"aggregation\": \"count\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "chart_generator",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "chart_type": "pie",\n'
+    '        "x": "provider",\n'
+    '        "y": null,\n'
+    '        "aggregation": "count"\n'
     "    }}\n"
     "}}\n\n"
     "Example 2 (User: List all columns in the sales spreadsheet)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"spreadsheet_query\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"plan\": {{\n"
-    "            \"operation\": \"list_columns\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "spreadsheet_query",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "plan": {{\n'
+    '            "operation": "list_columns"\n'
     "        }}\n"
     "    }}\n"
     "}}\n\n"
     "Example 3 (User: Calculate total revenue sum for 2024)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"spreadsheet_query\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"plan\": {{\n"
-    "            \"operation\": \"aggregate\",\n"
-    "            \"column\": \"revenue\",\n"
-    "            \"aggregate\": \"sum\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "spreadsheet_query",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "plan": {{\n'
+    '            "operation": "aggregate",\n'
+    '            "column": "revenue",\n'
+    '            "aggregate": "sum"\n'
     "        }}\n"
     "    }}\n"
     "}}\n\n"
     "Example 4 (User: Create a CSV of all employees mentioned in this document)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"spreadsheet_export\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"query\": \"all employees mentioned in this document\",\n"
-    "        \"format\": \"csv\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "spreadsheet_export",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "query": "all employees mentioned in this document",\n'
+    '        "format": "csv"\n'
     "    }}\n"
     "}}\n\n"
     "Example 5 (User: Generate timeline of this document)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"timeline_generator\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"query\": \"Generate timeline of this document\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "timeline_generator",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "query": "Generate timeline of this document"\n'
     "    }}\n"
     "}}\n\n"
     "Example 6 (User: Compare Project Alpha and Project Beta side-by-side)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"comparison_generator\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"query\": \"Compare Project Alpha and Project Beta\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "comparison_generator",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "query": "Compare Project Alpha and Project Beta"\n'
     "    }}\n"
     "}}\n\n"
     "Example 7 (User: Visualize the knowledge graph of this document)\n"
     "{{\n"
-    "    \"type\": \"tool\",\n"
-    "    \"tool\": \"graph_generator\",\n"
-    "    \"arguments\": {{\n"
-    "        \"document_id\": \"{document_id}\",\n"
-    "        \"query\": \"Visualize the knowledge graph of this document\"\n"
+    '    "type": "tool",\n'
+    '    "tool": "graph_generator",\n'
+    '    "arguments": {{\n'
+    '        "document_id": "{document_id}",\n'
+    '        "query": "Visualize the knowledge graph of this document"\n'
     "    }}\n"
     "}}\n\n"
-
     "--- WORKSPACE CONTEXT ---\n"
     "Uploaded Files: {uploaded_files_list}\n"
     "Focused Document: {document_in_focus} (ID: {document_id})\n\n"
@@ -173,20 +163,24 @@ def build_chat_messages(
     uploaded_files_list: List[str] = None,
     document_in_focus: str = None,
     document_id: str = None,
-    schema_info: str = None
+    schema_info: str = None,
 ) -> List[Tuple[str, str]]:
     """Builds a (role, content) message list ready to hand to the LLM."""
-    files_str = ", ".join(uploaded_files_list) if uploaded_files_list else "None"
-    focus_str = document_in_focus if document_in_focus else "All documents"
-    schema_info_block = f"Focused Document Schema Information:\n{schema_info}" if schema_info else "No CSV/spreadsheet schema loaded (Document is text/PDF)."
+    files_string = ", ".join(uploaded_files_list) if uploaded_files_list else "None"
+    focus_string = document_in_focus if document_in_focus else "All documents"
+    schema_info_block = (
+        f"Focused Document Schema Information:\n{schema_info}"
+        if schema_info
+        else "No CSV/spreadsheet schema loaded (Document is text/PDF)."
+    )
 
     messages = [
         (
             "system",
             SYSTEM_TEMPLATE.format(
                 context=context or "No relevant context found.",
-                uploaded_files_list=files_str,
-                document_in_focus=focus_str,
+                uploaded_files_list=files_string,
+                document_in_focus=focus_string,
                 document_id=document_id or "<document_id>",
                 schema_info_block=schema_info_block,
             ),

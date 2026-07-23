@@ -1,12 +1,12 @@
 from langchain_ollama import ChatOllama
 from app.config import settings
 
+
 class OllamaProvider:
     def __init__(self):
         # Configure ChatOllama using host and model settings loaded from env
         self.llm = ChatOllama(
-            base_url=settings.OLLAMA_HOST,
-            model=settings.OLLAMA_MODEL
+            base_url=settings.OLLAMA_HOST, model=settings.OLLAMA_MODEL
         )
 
     def ask(self, question: str) -> str:

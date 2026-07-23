@@ -15,4 +15,3 @@ class ChartGenerator:
             fig = px.bar(dataframe, x=x, y=y)
 
         return fig
-

@@ -3,6 +3,7 @@ from uuid import UUID
 from pydantic import BaseModel
 from app.models.document import DocumentStatus
 
+
 class DocumentBase(BaseModel):
     original_filename: str
     stored_filename: str
@@ -13,8 +14,10 @@ class DocumentBase(BaseModel):
     checksum: str | None = None
     status: DocumentStatus = DocumentStatus.UPLOADING
 
+
 class DocumentCreate(DocumentBase):
     pass
+
 
 class DocumentUpdate(BaseModel):
     original_filename: str | None = None
@@ -28,6 +31,7 @@ class DocumentUpdate(BaseModel):
     processed_at: datetime | None = None
     deleted_at: datetime | None = None
 
+
 class DocumentRead(DocumentBase):
     id: UUID
     user_id: int
@@ -39,6 +43,4 @@ class DocumentRead(DocumentBase):
     current_step: str | None = None
     error_message: str | None = None
 
-    model_config = {
-        "from_attributes": True
-    }
+    model_config = {"from_attributes": True}

@@ -19,19 +19,19 @@ class GeminiEmbeddings(Embeddings):
         embeddings = []
         for text in texts:
             # ponytail: simple loop, could be batched, but safe and simple
-            res = requests.post(
+            api_response = requests.post(
                 self.url, json={"content": {"parts": [{"text": text}]}}, timeout=10
             )
-            res.raise_for_status()
-            embeddings.append(res.json()["embedding"]["values"])
+            api_response.raise_for_status()
+            embeddings.append(api_response.json()["embedding"]["values"])
         return embeddings
 
     def embed_query(self, text: str) -> List[float]:
-        res = requests.post(
+        api_response = requests.post(
             self.url, json={"content": {"parts": [{"text": text}]}}, timeout=10
         )
-        res.raise_for_status()
-        return res.json()["embedding"]["values"]
+        api_response.raise_for_status()
+        return api_response.json()["embedding"]["values"]
 
 
 def get_embedding_model() -> GeminiEmbeddings:

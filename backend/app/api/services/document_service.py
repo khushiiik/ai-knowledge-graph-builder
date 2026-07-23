@@ -17,31 +17,28 @@ def get_csv_schema_info(document) -> str:
     from the CSV document to feed into the LLM context.
     """
     try:
-        df = load_csv(document)
-        col_types = []
-        for col in df.columns:
-            dtype = str(df[col].dtype)
-            if 'int' in dtype:
-                t = "integer"
-            elif 'float' in dtype:
-                t = "float"
-            elif 'object' in dtype or 'str' in dtype:
-                t = "string"
+        dataframe = load_csv(document)
+        column_types = []
+        for column_name in dataframe.columns:
+            dtype = str(dataframe[column_name].dtype)
+            if "int" in dtype:
+                type_name = "integer"
+            elif "float" in dtype:
+                type_name = "float"
+            elif "object" in dtype or "str" in dtype:
+                type_name = "string"
             else:
-                t = dtype
-            col_types.append(f"- {col} ({t})")
-        
+                type_name = dtype
+            column_types.append(f"- {column_name} ({type_name})")
+
         sample_rows = []
-        for _, row in df.head(2).iterrows():
-            row_str = " | ".join(str(val) for val in row.values)
-            sample_rows.append(row_str)
-        
-        columns_text = "\n".join(col_types)
+        for _, row in dataframe.head(2).iterrows():
+            row_string = " | ".join(str(value) for value in row.values)
+            sample_rows.append(row_string)
+
+        columns_text = "\n".join(column_types)
         samples_text = "\n".join(sample_rows)
-        
-        return (
-            f"Columns:\n{columns_text}\n\n"
-            f"Sample Rows:\n{samples_text}"
-        )
+
+        return f"Columns:\n{columns_text}\n\n" f"Sample Rows:\n{samples_text}"
     except Exception:
         return "Could not load CSV schema info."

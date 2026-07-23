@@ -86,10 +86,10 @@ def ensure_collection_exists(
     does not match the target vector_size, recreates it manually.
     """
     try:
-        info = client.get_collection(collection_name=collection_name)
+        collection_info = client.get_collection(collection_name=collection_name)
         # Check if the existing collection vectors size matches
-        current_size = info.config.params.vectors.size
-        if current_size != vector_size:
+        current_vector_size = collection_info.config.params.vectors.size
+        if current_vector_size != vector_size:
             client.delete_collection(collection_name=collection_name)
             client.create_collection(
                 collection_name=collection_name,
@@ -108,68 +108,71 @@ def ensure_collection_exists(
 
 
 def generate_dataset_profile(file_path: str) -> dict:
-    if file_path.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(file_path)
+    if file_path.endswith((".xlsx", ".xls")):
+        dataframe = pd.read_excel(file_path)
     else:
-        df = pd.read_csv(file_path)
-        
-    row_count = len(df)
-    col_count = len(df.columns)
+        dataframe = pd.read_csv(file_path)
+
+    row_count = len(dataframe)
+    column_count = len(dataframe.columns)
     columns = []
     statistics = {}
     text_columns = []
-    
-    for col in df.columns:
-        col_type = str(df[col].dtype)
-        if "int" in col_type or "float" in col_type:
+
+    for column_name in dataframe.columns:
+        column_type = str(dataframe[column_name].dtype)
+        if "int" in column_type or "float" in column_type:
             inferred_type = "numeric"
             role = "measure"
             try:
-                statistics[str(col)] = {
-                    "min": float(df[col].min()),
-                    "max": float(df[col].max()),
-                    "mean": float(df[col].mean())
+                statistics[str(column_name)] = {
+                    "min": float(dataframe[column_name].min()),
+                    "max": float(dataframe[column_name].max()),
+                    "mean": float(dataframe[column_name].mean()),
                 }
             except Exception:
                 pass
-        elif "datetime" in col_type or "date" in str(col).lower():
+        elif "datetime" in column_type or "date" in str(column_name).lower():
             inferred_type = "datetime"
             role = "time"
         else:
             inferred_type = "categorical"
             role = "dimension"
             try:
-                mean_len = df[col].astype(str).str.len().mean()
-                if mean_len > 40:
+                mean_length = dataframe[column_name].astype(str).str.len().mean()
+                if mean_length > 40:
                     inferred_type = "text"
                     role = "semantic"
-                    text_columns.append(str(col))
+                    text_columns.append(str(column_name))
             except Exception:
                 pass
-                
-        columns.append({
-            "name": str(col),
-            "type": inferred_type,
-            "role": role
-        })
-        
+
+        columns.append({"name": str(column_name), "type": inferred_type, "role": role})
+
     has_text = len(text_columns) > 0
-    has_numeric = len([c for c in columns if c["type"] == "numeric"]) > 0
+
+    has_numeric = False
+    for col in columns:
+        if col["type"] == "numeric":
+            has_numeric = True
+            break
+
     has_columns = len(columns) > 0
-    
+
     return {
         "version": 1,
         "row_count": row_count,
-        "column_count": col_count,
+        "column_count": column_count,
         "columns": columns,
         "statistics": statistics,
         "text_columns": text_columns,
         "supports": {
             "semantic_search": has_text,
             "visualization": has_columns,
-            "aggregation": has_numeric
-        }
+            "aggregation": has_numeric,
+        },
     }
+
 
 def ingest_document_to_qdrant(
     db: Session,
@@ -192,72 +195,86 @@ def ingest_document_to_qdrant(
     _update_job_progress(
         db, job_id, 10, "Extracting text content from file", "PROCESSING"
     )
-    docs = extract_documents_from_file(file_path, mime_type)
-    if not docs:
+    extracted_documents = extract_documents_from_file(file_path, mime_type)
+    if not extracted_documents:
         return
 
     # Sanitize document text to prevent ValueError: A string literal cannot contain NUL (0x00) characters.
-    for doc in docs:
-        if doc.page_content:
-            doc.page_content = doc.page_content.replace("\x00", "").replace(
+    for document in extracted_documents:
+        if document.page_content:
+            document.page_content = document.page_content.replace("\x00", "").replace(
                 "\u0000", ""
             )
 
     # 2. Update Document record with raw extracted text in Postgres
     _update_job_progress(db, job_id, 30, "Saving raw text to database")
-    db_doc = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
-    if db_doc:
-        file_type = db_doc.file_type.lower()
-        if file_type in ('csv', 'xlsx', 'xls'):
+    db_document = (
+        db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
+    )
+    if db_document:
+        file_type_lower = db_document.file_type.lower()
+        if file_type_lower in ("csv", "xlsx", "xls"):
             try:
-                profile = generate_dataset_profile(file_path)
-                db_doc.dataset_profile = profile
-                db_doc.embedding_status = "NOT_STARTED"
-                db_doc.raw_text = None
+                dataset_profile = generate_dataset_profile(file_path)
+                db_document.dataset_profile = dataset_profile
+                db_document.embedding_status = "NOT_STARTED"
+                db_document.raw_text = None
                 db.commit()
-                _update_job_progress(db, job_id, 100, "Spreadsheet dataset profiled successfully (Lazy indexing enabled)", "COMPLETED")
+                _update_job_progress(
+                    db,
+                    job_id,
+                    100,
+                    "Spreadsheet dataset profiled successfully (Lazy indexing enabled)",
+                    "COMPLETED",
+                )
                 return
-            except Exception as e:
-                db_doc.raw_text = f"Profiling failed: {str(e)}"
+            except Exception as error:
+                db_document.raw_text = f"Profiling failed: {str(error)}"
                 db.commit()
-                _update_job_progress(db, job_id, 100, f"Profiling failed: {str(e)}", "FAILED")
+                _update_job_progress(
+                    db, job_id, 100, f"Profiling failed: {str(error)}", "FAILED"
+                )
                 return
         else:
-            raw_text = "\n".join([doc.page_content for doc in docs])
-            db_doc.raw_text = raw_text
+            raw_text_parts = []
+            for doc in extracted_documents:
+                raw_text_parts.append(doc.page_content)
+            raw_text = "\n".join(raw_text_parts)
+            db_document.raw_text = raw_text
             db.commit()
 
     # 3. Chunk text
     _update_job_progress(db, job_id, 50, "Chunking document text")
-    chunks = chunk_documents(docs, chunk_size=1200, chunk_overlap=200)
-
+    chunks = chunk_documents(extracted_documents, chunk_size=1200, chunk_overlap=200)
 
     # 4. Generate IDs and save Chunk entities to Postgres
     _update_job_progress(db, job_id, 70, "Persisting chunks to database")
     postgres_chunks = []
-    qdrant_ids = []
-    for idx, chunk in enumerate(chunks):
+    qdrant_point_ids = []
+    for chunk_index, chunk_document in enumerate(chunks):
         chunk_id = uuid.uuid4()
 
         # Attach tenant_id and metadata for security/filtering
-        chunk.metadata["tenant_id"] = tenant_id
-        chunk.metadata["source_file"] = os.path.basename(file_path)
+        chunk_document.metadata["tenant_id"] = tenant_id
+        chunk_document.metadata["source_file"] = os.path.basename(file_path)
 
-        page = chunk.metadata.get("page")
-        page_section = f"Page {page + 1}" if page is not None else None
+        page_number = chunk_document.metadata.get("page")
+        page_section_label = (
+            f"Page {page_number + 1}" if page_number is not None else None
+        )
 
-        postgres_chunk = Chunk(
+        new_postgres_chunk = Chunk(
             id=chunk_id,
             document_id=document_id,
             user_id=tenant_id,
-            chunk_index=idx,
-            text=chunk.page_content,
+            chunk_index=chunk_index,
+            text=chunk_document.page_content,
             source_filename=os.path.basename(file_path),
-            page_section=page_section,
+            page_section=page_section_label,
             qdrant_point_id=str(chunk_id),
         )
-        postgres_chunks.append(postgres_chunk)
-        qdrant_ids.append(str(chunk_id))
+        postgres_chunks.append(new_postgres_chunk)
+        qdrant_point_ids.append(str(chunk_id))
 
     db.add_all(postgres_chunks)
     db.commit()
@@ -277,16 +294,16 @@ def ingest_document_to_qdrant(
         client=client, collection_name=COLLECTION_NAME, embeddings=embeddings
     )
 
-    vector_store.add_documents(documents=chunks, ids=qdrant_ids)
+    vector_store.add_documents(documents=chunks, ids=qdrant_point_ids)
 
     # 6. Extract entities & relationships per chunk and write them into Neo4j
     _update_job_progress(
         db, job_id, 97, "Extracting entities and relationships into Neo4j"
     )
 
-    for chunk in chunks:
+    for chunk_document in chunks:
         try:
-            extraction = extract_entities_and_relations(chunk.page_content)
+            extraction = extract_entities_and_relations(chunk_document.page_content)
             write_graph_data(
                 user_id=tenant_id,
                 source_filename=os.path.basename(file_path),
@@ -318,86 +335,102 @@ def get_tenant_retriever(
     )
 
     # Define Qdrant payload filter to enforce multi-tenancy boundaries
-    must_conditions = [
+    filter_conditions = [
         qdrant_models.FieldCondition(
             key="metadata.tenant_id", match=qdrant_models.MatchValue(value=tenant_id)
         )
     ]
     if source_file:
-        must_conditions.append(
+        filter_conditions.append(
             qdrant_models.FieldCondition(
                 key="metadata.source_file",
                 match=qdrant_models.MatchValue(value=source_file),
             )
         )
-    tenant_filter = qdrant_models.Filter(must=must_conditions)
+    tenant_filter = qdrant_models.Filter(must=filter_conditions)
 
     return vector_store.as_retriever(
         search_type="similarity", search_kwargs={"filter": tenant_filter, "k": limit}
     )
+
 
 def run_lazy_indexing(db: Session, document_id: UUID, tenant_id: int) -> None:
     """
     Performs chunking, embedding generation, and Qdrant storage only for the text/semantic columns
     of a spreadsheet on-demand.
     """
-    db_doc = db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
-    if not db_doc:
+    db_document = (
+        db.query(DocumentModel).filter(DocumentModel.id == document_id).first()
+    )
+    if not db_document:
         return
 
-    file_path = db_doc.storage_path
-    profile = db_doc.dataset_profile or {}
-    text_cols = profile.get("text_columns", [])
+    file_path = db_document.storage_path
+    dataset_profile = db_document.dataset_profile or {}
+    text_columns = dataset_profile.get("text_columns", [])
 
-    if file_path.endswith(('.xlsx', '.xls')):
-        df = pd.read_excel(file_path)
+    if file_path.endswith((".xlsx", ".xls")):
+        dataframe = pd.read_excel(file_path)
     else:
-        df = pd.read_csv(file_path)
+        dataframe = pd.read_csv(file_path)
 
     # Fallback to all categorical columns if no text columns found
-    if not text_cols:
-        text_cols = [col for col in df.columns if str(df[col].dtype) in ('object', 'string')]
-    if not text_cols:
-        text_cols = list(df.columns)
+    if not text_columns:
+        text_columns = []
+        for column_name in dataframe.columns:
+            if str(dataframe[column_name].dtype) in ("object", "string"):
+                text_columns.append(column_name)
+    if not text_columns:
+        text_columns = list(dataframe.columns)
 
     # Chunk in row groups of 50
     chunk_size_rows = 50
     chunks = []
-    for start_idx in range(0, len(df), chunk_size_rows):
-        subset = df.iloc[start_idx : start_idx + chunk_size_rows]
+    for start_row_index in range(0, len(dataframe), chunk_size_rows):
+        dataframe_subset = dataframe.iloc[
+            start_row_index : start_row_index + chunk_size_rows
+        ]
         lines = []
-        for idx, row in subset.iterrows():
-            parts = [f"{col}: {row[col]}" for col in text_cols if pd.notna(row[col])]
+        for row_index, row_data in dataframe_subset.iterrows():
+            parts = []
+            for column_name in text_columns:
+                if pd.notna(row_data[column_name]):
+                    parts.append(f"{column_name}: {row_data[column_name]}")
             if parts:
                 lines.append(" | ".join(parts))
         if lines:
-            chunk_text = f"File: {db_doc.original_filename}\nRows {start_idx} to {start_idx + len(subset) - 1}\n" + "\n".join(lines)
-            chunks.append(Document(page_content=chunk_text, metadata={"source": file_path}))
+            chunk_text = (
+                f"File: {db_document.original_filename}\nRows {start_row_index} to {start_row_index + len(dataframe_subset) - 1}\n"
+                + "\n".join(lines)
+            )
+            chunks.append(
+                Document(page_content=chunk_text, metadata={"source": file_path})
+            )
 
     if not chunks:
-        db_doc.embedding_status = "READY"
+        db_document.embedding_status = "READY"
         db.commit()
         return
 
     postgres_chunks = []
-    qdrant_ids = []
-    for idx, chunk in enumerate(chunks):
+    qdrant_point_ids = []
+    for chunk_index, chunk_document in enumerate(chunks):
         chunk_id = uuid.uuid4()
-        chunk.metadata["tenant_id"] = tenant_id
-        chunk.metadata["source_file"] = os.path.basename(file_path)
+        chunk_document.metadata["tenant_id"] = tenant_id
+        chunk_document.metadata["source_file"] = os.path.basename(file_path)
 
-        postgres_chunk = Chunk(
+        new_postgres_chunk = Chunk(
             id=chunk_id,
             document_id=document_id,
             user_id=tenant_id,
-            chunk_index=idx,
-            text=chunk.page_content,
+            chunk_index=chunk_index,
+            text=chunk_document.page_content,
             source_filename=os.path.basename(file_path),
-            page_section=f"Rows {idx * chunk_size_rows} to {(idx + 1) * chunk_size_rows}",
+            page_section=f"Rows {chunk_index * chunk_size_rows} to {(chunk_index + 1) * chunk_size_rows}",
             qdrant_point_id=str(chunk_id),
         )
-        postgres_chunks.append(postgres_chunk)
-        qdrant_ids.append(str(chunk_id))
+        postgres_chunks.append(new_postgres_chunk)
+        qdrant_point_ids.append(str(chunk_id))
 
     db.add_all(postgres_chunks)
     db.commit()
@@ -410,8 +443,8 @@ def run_lazy_indexing(db: Session, document_id: UUID, tenant_id: int) -> None:
     vector_store = Qdrant(
         client=client, collection_name=COLLECTION_NAME, embeddings=embeddings
     )
-    vector_store.add_documents(documents=chunks, ids=qdrant_ids)
+    vector_store.add_documents(documents=chunks, ids=qdrant_point_ids)
 
     # Set status to READY
-    db_doc.embedding_status = "READY"
+    db_document.embedding_status = "READY"
     db.commit()

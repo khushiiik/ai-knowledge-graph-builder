@@ -46,7 +46,7 @@ def write_graph_data(
                 source_filename=source_filename,
             )
 
-        for rel in relationships:
+        for relationship in relationships:
             session.run(
                 """
                 MERGE (a:Entity {name: $source, userId: $user_id})
@@ -54,15 +54,17 @@ def write_graph_data(
                 MERGE (a)-[r:RELATES_TO {type: $relation, userId: $user_id}]->(b)
                 SET r.sourceDocument = $source_filename
                 """,
-                source=rel["source"],
-                target=rel["target"],
-                relation=rel.get("relation", "RELATED_TO"),
+                source=relationship["source"],
+                target=relationship["target"],
+                relation=relationship.get("relation", "RELATED_TO"),
                 user_id=user_id,
                 source_filename=source_filename,
             )
 
 
-def query_related_facts(user_id: int, entity_names: List[str], limit: int = 8) -> List[Dict]:
+def query_related_facts(
+    user_id: int, entity_names: List[str], limit: int = 8
+) -> List[Dict]:
     """
     Given entity names mentioned in a user's question, finds relationships involving
     those entities in this user's graph (and only this user's graph, via userId).
@@ -72,7 +74,7 @@ def query_related_facts(user_id: int, entity_names: List[str], limit: int = 8) -
 
     driver = get_neo4j_driver()
     with driver.session() as session:
-        result = session.run(
+        query_result = session.run(
             """
             MATCH (a:Entity {userId: $user_id})-[r:RELATES_TO {userId: $user_id}]->(b:Entity {userId: $user_id})
             WHERE a.name IN $entity_names OR b.name IN $entity_names
@@ -83,7 +85,7 @@ def query_related_facts(user_id: int, entity_names: List[str], limit: int = 8) -
             entity_names=entity_names,
             limit=limit,
         )
-        return [dict(record) for record in result]
+        return [dict(fact_record) for fact_record in query_result]
 
 
 def query_all_user_facts(user_id: int, limit: int = 40) -> List[Dict]:
@@ -92,7 +94,7 @@ def query_all_user_facts(user_id: int, limit: int = 40) -> List[Dict]:
     """
     driver = get_neo4j_driver()
     with driver.session() as session:
-        result = session.run(
+        query_result = session.run(
             """
             MATCH (a:Entity {userId: $user_id})-[r:RELATES_TO {userId: $user_id}]->(b:Entity {userId: $user_id})
             RETURN a.name AS source, r.type AS relation, b.name AS target, r.sourceDocument AS source_doc
@@ -101,7 +103,7 @@ def query_all_user_facts(user_id: int, limit: int = 40) -> List[Dict]:
             user_id=user_id,
             limit=limit,
         )
-        return [dict(record) for record in result]
+        return [dict(fact_record) for fact_record in query_result]
 
 
 def query_document_facts(user_id: int, source_file: str, limit: int = 10) -> List[Dict]:
@@ -110,7 +112,7 @@ def query_document_facts(user_id: int, source_file: str, limit: int = 10) -> Lis
     """
     driver = get_neo4j_driver()
     with driver.session() as session:
-        result = session.run(
+        query_result = session.run(
             """
             MATCH (a:Entity {userId: $user_id})-[r:RELATES_TO {userId: $user_id, sourceDocument: $source_file}]->(b:Entity {userId: $user_id})
             RETURN a.name AS source, r.type AS relation, b.name AS target, r.sourceDocument AS source_doc
@@ -120,7 +122,7 @@ def query_document_facts(user_id: int, source_file: str, limit: int = 10) -> Lis
             source_file=source_file,
             limit=limit,
         )
-        return [dict(record) for record in result]
+        return [dict(fact_record) for fact_record in query_result]
 
 
 def delete_document_facts(user_id: int, source_file: str) -> None:
@@ -136,7 +138,7 @@ def delete_document_facts(user_id: int, source_file: str) -> None:
             DELETE r
             """,
             user_id=user_id,
-            source_file=source_file
+            source_file=source_file,
         )
         # Delete orphaned nodes
         session.run(
@@ -146,5 +148,5 @@ def delete_document_facts(user_id: int, source_file: str) -> None:
             DELETE e
             """,
             user_id=user_id,
-            source_file=source_file
+            source_file=source_file,
         )

@@ -21,26 +21,39 @@ def extract_entities_and_relations(text: str) -> Dict[str, List[Dict]]:
 
     try:
         response = provider.llm.invoke(prompt)
-        raw = str(response.content).strip()
+        raw_response_content = str(response.content).strip()
         # Strip markdown code fences some models wrap JSON in, despite instructions
-        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(raw)
+        raw_response_content = (
+            raw_response_content.removeprefix("```json")
+            .removeprefix("```")
+            .removesuffix("```")
+            .strip()
+        )
+        parsed_json_data = json.loads(raw_response_content)
     except Exception:
         # Extraction is best-effort -- a malformed LLM response shouldn't fail ingestion
         return {"entities": [], "relationships": []}
 
-    entities = [
-        {"name": e["name"].strip(), "type": e.get("type", "UNKNOWN")}
-        for e in data.get("entities", [])
-        if e.get("name") and e["name"].strip()
-    ]
-    relationships = [
-        {
-            "source": r["source"].strip(),
-            "relation": r.get("relation", "RELATED_TO").strip() or "RELATED_TO",
-            "target": r["target"].strip(),
-        }
-        for r in data.get("relationships", [])
-        if r.get("source") and r.get("target")
-    ]
+    entities = []
+    for entity in parsed_json_data.get("entities", []):
+        name = entity.get("name")
+        if name and name.strip():
+            entities.append(
+                {"name": name.strip(), "type": entity.get("type", "UNKNOWN")}
+            )
+
+    relationships = []
+    for relationship in parsed_json_data.get("relationships", []):
+        source = relationship.get("source")
+        target = relationship.get("target")
+        if source and target:
+            relation = relationship.get("relation", "RELATED_TO") or "RELATED_TO"
+            relationships.append(
+                {
+                    "source": source.strip(),
+                    "relation": relation.strip(),
+                    "target": target.strip(),
+                }
+            )
+
     return {"entities": entities, "relationships": relationships}

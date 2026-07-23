@@ -1,5 +1,6 @@
 from app.config import settings
 
+
 def get_llm_provider():
     """
     Factory function to instantiate and return the correct LLM provider.
@@ -7,10 +8,12 @@ def get_llm_provider():
     """
     if settings.GEMINI_MODEL.startswith("groq/") and settings.GROQ_API_KEY:
         from app.llm.providers.groq import GroqProvider
+
         return GroqProvider()
-    
+
     try:
         from app.llm.providers.ollama import OllamaProvider
+
         return OllamaProvider()
     except ImportError:
         raise ImportError(

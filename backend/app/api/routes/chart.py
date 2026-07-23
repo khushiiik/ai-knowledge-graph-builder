@@ -12,33 +12,39 @@ from app.tools.chart_generator import ChartGenerator
 
 router = APIRouter(prefix="/chart", tags=["chart"])
 
+
 class ChartRequest(BaseModel):
     document_id: UUID
     chart_type: str
     x: str
     y: str
 
+
 @router.post("/chart")
 def create_chart(
     payload: ChartRequest,
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_active_user)
+    current_user: UserModel = Depends(get_current_active_user),
 ):
     # Enforce strict multi-tenant user data isolation: filter by both document ID and user ID
-    document = db.query(DocumentModel).filter(
-        DocumentModel.id == payload.document_id,
-        DocumentModel.user_id == current_user.id
-    ).first()
+    document = (
+        db.query(DocumentModel)
+        .filter(
+            DocumentModel.id == payload.document_id,
+            DocumentModel.user_id == current_user.id,
+        )
+        .first()
+    )
     if not document:
         raise DocumentNotFoundException()
 
-    df = load_csv(document)
+    loaded_dataframe = load_csv(document)
 
     filename = ChartGenerator().generate(
-        dataframe=df,
+        dataframe=loaded_dataframe,
         chart_type=payload.chart_type,
         x=payload.x,
-        y=payload.y
+        y=payload.y,
     )
 
     return {"url": f"/generated/charts/{filename}"}

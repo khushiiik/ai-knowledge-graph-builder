@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.models.user import Base
 
+
 class DocumentStatus(str, Enum):
     UPLOADING = "UPLOADING"
     QUEUED = "QUEUED"
@@ -13,11 +14,14 @@ class DocumentStatus(str, Enum):
     FAILED = "FAILED"
     DELETED = "DELETED"
 
+
 class Document(Base):
     __tablename__ = "documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     original_filename = Column(String, nullable=False)
     stored_filename = Column(String, nullable=False)
@@ -32,7 +36,9 @@ class Document(Base):
     raw_text = Column(Text, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
     processed_at = Column(DateTime, nullable=True)
     deleted_at = Column(DateTime, nullable=True)
 
